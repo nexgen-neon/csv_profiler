@@ -1,95 +1,103 @@
-import pandas as pd
+from collections import Counter
 
-from utils.statistics import percentage
+import pandas as pd
 
 
 class CategoricalProfiler:
+    """
+    Streaming categorical profiler.
 
-    def profile(self, series: pd.Series) -> dict:
-        """
-        Profile a categorical column.
+    Calculates:
 
-        Calculates:
-        - Unique values
-        - Unique percentage
-        - Most frequent values
-        - Frequency of each top value
-        - Frequency percentage
-        """
+    - Unique values
+    - Unique percentage
+    - Most frequent values
+    - Frequency
+    - Frequency percentage
+    """
 
-        # Remove null values because frequency
-        # analysis is performed on actual values.
+    def __init__(self, top_n: int = 5):
+        self.top_n = top_n
+
+        self.value_counts = Counter()
+
+        self.total_count = 0
+        self.non_null_count = 0
+
+    def process_batch(
+        self,
+        series: pd.Series,
+    ) -> None:
+
+        self.total_count += len(series)
+
         non_null = series.dropna()
 
-        # Total number of non-null values
-        total_values = len(non_null)
-
-        # -------------------------------------------------
-        # UNIQUE VALUES
-        # -------------------------------------------------
-
-        unique_values = int(
-            non_null.nunique()
+        self.non_null_count += len(
+            non_null
         )
 
-        # -------------------------------------------------
-        # UNIQUE PERCENTAGE
-        # -------------------------------------------------
-
-        unique_percentage = percentage(
-            unique_values,
-            len(series)
+        counts = Counter(
+            non_null.astype(str).tolist()
         )
 
-        # -------------------------------------------------
-        # FREQUENCY OF EACH VALUE
-        # -------------------------------------------------
-
-        value_counts = (
-            non_null.value_counts()
+        self.value_counts.update(
+            counts
         )
 
-        # -------------------------------------------------
-        # TOP 5 MOST FREQUENT VALUES
-        # -------------------------------------------------
+    def finalize(self) -> dict:
+
+        unique_values = len(
+            self.value_counts
+        )
+
+        unique_percentage = (
+            (
+                unique_values
+                / self.non_null_count
+            )
+            * 100
+            if self.non_null_count
+            else 0.0
+        )
+
+        top_values = (
+            self.value_counts
+            .most_common(self.top_n)
+        )
 
         most_frequent_values = []
 
-        for value, frequency in (
-            value_counts.head(5).items()
-        ):
+        for value, frequency in top_values:
 
-            frequency = int(frequency)
-
-            frequency_percentage = percentage(
-                frequency,
-                total_values
+            frequency_percentage = (
+                (
+                    frequency
+                    / self.non_null_count
+                )
+                * 100
+                if self.non_null_count
+                else 0.0
             )
 
             most_frequent_values.append(
                 {
-                    "value": str(value),
-
-                    "frequency":
-                        frequency,
-
-                    "frequency_percentage":
-                        frequency_percentage
+                    "value": value,
+                    "frequency": frequency,
+                    "frequency_percentage": round(
+                        frequency_percentage,
+                        2,
+                    ),
                 }
             )
 
-        # -------------------------------------------------
-        # RETURN RESULT
-        # -------------------------------------------------
-
         return {
-
-            "unique_values":
-                unique_values,
-
-            "unique_percentage":
+            "unique_values": unique_values,
+            "unique_percentage": round(
                 unique_percentage,
-
-            "most_frequent_values":
+                2,
+            ),
+            "most_frequent_values": (
                 most_frequent_values
+            ),
         }

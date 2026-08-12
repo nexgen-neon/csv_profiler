@@ -3,779 +3,921 @@ import json
 import pandas as pd
 import streamlit as st
 
-from example.readers import CSVReader
 from example.profiler import DataProfiler
+from example.readers import CSVReader
 
 
-# =========================================================
-# PAGE CONFIGURATION
-# =========================================================
+# ============================================================
+# PAGE CONFIG
+# ============================================================
 
 st.set_page_config(
     page_title="Data Profiler",
     page_icon="📊",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 
-# =========================================================
-# TITLE
-# =========================================================
+# ============================================================
+# CUSTOM CSS
+# ============================================================
 
-st.title("📊 Data Profiler")
-
-st.write(
+st.markdown(
     """
-    Upload a CSV file to generate dataset-level
-    and column-level profiling.
+    <style>
+
+    .main-title {
+        font-size: 42px;
+        font-weight: 700;
+        margin-bottom: 5px;
+    }
+
+    .subtitle {
+        font-size: 17px;
+        color: #6b7280;
+        margin-bottom: 30px;
+    }
+
+    .section-title {
+        font-size: 27px;
+        font-weight: 650;
+        margin-top: 30px;
+        margin-bottom: 15px;
+    }
+
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# HEADER
+# ============================================================
+
+st.markdown(
+    '<div class="main-title">📊 Data Profiler</div>',
+    unsafe_allow_html=True,
+)
+
+st.markdown(
     """
+    <div class="subtitle">
+    Analyze datasets with detailed dataset-level,
+    column-level, numerical and categorical profiling.
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
 
-# =========================================================
-# FILE UPLOAD
-# =========================================================
+# ============================================================
+# SIDEBAR
+# ============================================================
 
-uploaded_file = st.file_uploader(
-    "Upload your CSV file",
-    type=["csv"]
-)
+with st.sidebar:
 
+    st.header("⚙️ Profiling Settings")
 
-# =========================================================
-# PROFILE BUTTON
-# =========================================================
+    top_n = st.slider(
+        "Top categorical values",
+        min_value=3,
+        max_value=20,
+        value=5,
+    )
 
-if uploaded_file is not None:
+    st.divider()
+
+    st.subheader("📦 File Limits")
+
+    st.write(
+        "**Maximum upload:** 30 GB"
+    )
+
+    st.write(
+        "**Processing batch:** 1000 MB"
+    )
+
+    st.caption(
+        "Large files are processed incrementally "
+        "rather than as one complete DataFrame."
+    )
+
+    st.divider()
 
     st.info(
-        f"Selected file: {uploaded_file.name}"
-    )
-
-    if st.button(
-        "🚀 Start Profiling",
-        type="primary"
-    ):
-
-        try:
-
-            # -------------------------------------------------
-            # INGESTION
-            #
-            # This is the only CSV-specific part.
-            # -------------------------------------------------
-
-            reader = CSVReader(
-                uploaded_file
-            )
-
-            # -------------------------------------------------
-            # READER -> DATAFRAME
-            # -------------------------------------------------
-
-            data = reader.read()
-
-            # -------------------------------------------------
-            # DATAFRAME -> PROFILER
-            # -------------------------------------------------
-
-            profiler = DataProfiler(
-                data=data,
-                dataset_name=uploaded_file.name
-            )
-
-            # -------------------------------------------------
-            # GENERATE PROFILE
-            # -------------------------------------------------
-
-            profile = profiler.generate()
-
-            # -------------------------------------------------
-            # STORE IN SESSION
-            # -------------------------------------------------
-
-            st.session_state[
-                "data"
-            ] = data
-
-            st.session_state[
-                "profile"
-            ] = profile
-
-            st.session_state[
-                "profile_generated"
-            ] = True
-
-            st.success(
-                "Profiling completed successfully!"
-            )
-
-        except Exception as error:
-
-            st.error(
-                f"Error while profiling: {error}"
-            )
-
-
-# =========================================================
-# DISPLAY PROFILE
-# =========================================================
-
-if st.session_state.get(
-    "profile_generated",
-    False
-):
-
-    data = st.session_state[
-        "data"
-    ]
-
-    profile = st.session_state[
-        "profile"
-    ]
-
-    dataset = profile[
-        "dataset"
-    ]
-
-    columns = profile[
-        "columns"
-    ]
-
-
-    # =====================================================
-    # TABS
-    # =====================================================
-
-    (
-        overview_tab,
-        columns_tab,
-        numerical_tab,
-        categorical_tab,
-        json_tab
-    ) = st.tabs(
-        [
-            "📋 Overview",
-            "🧱 Columns",
-            "🔢 Numerical",
-            "🏷️ Categorical",
-            "📄 JSON"
-        ]
+        "Supported format: CSV"
     )
 
 
-    # =====================================================
-    # OVERVIEW TAB
-    # =====================================================
+# ============================================================
+# FILE UPLOAD
+# ============================================================
 
-    with overview_tab:
+uploaded_file = st.file_uploader(
+    "Upload your dataset",
+    type=["csv"],
+    max_upload_size=30720,
+    help="Maximum file size: 30 GB",
+)
 
-        st.header(
-            "Dataset-Level Profiling"
+
+# ============================================================
+# NO FILE
+# ============================================================
+
+if uploaded_file is None:
+
+    st.info(
+        "👆 Upload a CSV dataset to begin profiling."
+    )
+
+    st.stop()
+
+
+# ============================================================
+# FILE INFORMATION
+# ============================================================
+
+file_size_bytes = uploaded_file.size
+
+file_size_mb = (
+    file_size_bytes / (1024 * 1024)
+)
+
+file_size_gb = (
+    file_size_bytes / (1024 * 1024 * 1024)
+)
+
+
+st.success(
+    f"Uploaded: **{uploaded_file.name}**"
+)
+
+
+# ============================================================
+# FILE SUMMARY
+# ============================================================
+
+c1, c2, c3 = st.columns(3)
+
+with c1:
+
+    st.metric(
+        "📄 File",
+        uploaded_file.name,
+    )
+
+with c2:
+
+    if file_size_gb >= 1:
+
+        st.metric(
+            "💾 File Size",
+            f"{file_size_gb:.2f} GB",
         )
 
-        # -------------------------------------------------
-        # FIRST ROW OF METRICS
-        # -------------------------------------------------
+    else:
 
-        col1, col2, col3, col4 = (
-            st.columns(4)
+        st.metric(
+            "💾 File Size",
+            f"{file_size_mb:.2f} MB",
         )
 
-        col1.metric(
-            "Rows",
-            dataset["rows"]
+with c3:
+
+    st.metric(
+        "📦 Batch Size",
+        "1000 MB",
+    )
+
+
+# ============================================================
+# START BUTTON
+# ============================================================
+
+start_profiling = st.button(
+    "🚀 Start Profiling",
+    type="primary",
+    use_container_width=True,
+)
+
+
+if start_profiling:
+
+    progress = st.progress(0)
+
+    status = st.empty()
+
+    try:
+
+        # ====================================================
+        # CREATE READER
+        # ====================================================
+
+        status.info(
+            "📥 Initializing dataset reader..."
         )
 
-        col2.metric(
-            "Columns",
-            dataset["columns"]
+        uploaded_file.seek(0)
+
+        reader = CSVReader(
+            uploaded_file
         )
 
-        col3.metric(
-            "Duplicate Rows",
-            dataset["duplicate_rows"]
+        # ====================================================
+        # CREATE PROFILER
+        # ====================================================
+
+        profiler = DataProfiler(
+            top_n=top_n
         )
 
-        col4.metric(
-            "Missing %",
-            f'{dataset["overall_missing_percentage"]}%'
+        # ====================================================
+        # PROCESS DATA
+        # ====================================================
+
+        status.info(
+            "🔄 Processing dataset in 1000 MB batches..."
         )
 
+        total_size = uploaded_file.size
 
-        # -------------------------------------------------
-        # SECOND ROW
-        # -------------------------------------------------
+        processed_bytes = 0
 
-        col5, col6, col7 = (
-            st.columns(3)
-        )
+        batch_number = 0
 
-        col5.metric(
-            "Memory Usage",
-            f'{dataset["memory_usage_bytes"]:,} bytes'
-        )
-
-        col6.metric(
-            "Completely Empty Rows",
-            dataset[
-                "completely_empty_rows"
-            ]
-        )
-
-        col7.metric(
-            "Completely Empty Columns",
-            dataset[
-                "completely_empty_columns"
-            ]
-        )
-
-
-        # -------------------------------------------------
-        # DATA PREVIEW
-        # -------------------------------------------------
-
-        st.subheader(
-            "Dataset Preview"
-        )
-
-        st.dataframe(
-            data.head(10),
-            use_container_width=True
-        )
-
-
-        # -------------------------------------------------
-        # MISSING VALUES
-        # -------------------------------------------------
-
-        st.subheader(
-            "Missing Values by Column"
-        )
-
-        missing_data = pd.DataFrame(
-            {
-                "Column": list(
-                    columns.keys()
-                ),
-
-                "Missing %": [
-                    columns[column][
-                        "null_percentage"
-                    ]
-                    for column in columns
-                ]
-            }
-        )
-
-        missing_data = (
-            missing_data
-            .sort_values(
-                "Missing %",
-                ascending=False
-            )
-        )
-
-        st.bar_chart(
-            missing_data.set_index(
-                "Column"
-            )
-        )
-
-
-        # -------------------------------------------------
-        # SEMANTIC TYPES
-        # -------------------------------------------------
-
-        st.subheader(
-            "Semantic Data Types"
-        )
-
-        semantic_types = pd.Series(
-            [
-                columns[column][
-                    "semantic_type"
-                ]
-                for column in columns
-            ]
-        )
-
-        semantic_counts = (
-            semantic_types
-            .value_counts()
-        )
-
-        st.bar_chart(
-            semantic_counts
-        )
-
-
-    # =====================================================
-    # COLUMNS TAB
-    # =====================================================
-
-    with columns_tab:
-
-        st.header(
-            "Column-Level Profiling"
-        )
-
-        # -------------------------------------------------
-        # COLUMN SEARCH
-        # -------------------------------------------------
-
-        search = st.text_input(
-            "🔍 Search column"
-        )
-
-        column_rows = []
-
-        for column_name, info in (
-            columns.items()
+        for batch in reader.read_batches(
+            batch_size_mb=1000
         ):
 
-            if (
-                search
-                and
-                search.lower()
-                not in column_name.lower()
-            ):
+            batch_number += 1
 
-                continue
+            status.info(
+                f"🔄 Processing batch {batch_number}..."
+            )
 
-            column_rows.append(
+            profiler.process_batch(
+                batch,
+                batch_size_bytes=batch.memory_usage(
+                    deep=True
+                ).sum(),
+            )
+
+            processed_bytes += (
+                batch.memory_usage(
+                    deep=True
+                ).sum()
+            )
+
+            percentage = min(
+                int(
+                    (
+                        processed_bytes
+                        / total_size
+                    )
+                    * 100
+                ),
+                99,
+            )
+
+            progress.progress(
+                percentage
+            )
+
+        # ====================================================
+        # FINALIZE
+        # ====================================================
+
+        status.info(
+            "🧮 Finalizing profiling statistics..."
+        )
+
+        result = profiler.finalize()
+
+        progress.progress(100)
+
+        status.success(
+            "✅ Profiling completed successfully!"
+        )
+
+        # ====================================================
+        # SAVE RESULT
+        # ====================================================
+
+        st.session_state[
+            "profile_result"
+        ] = result
+
+        st.session_state[
+            "profile_filename"
+        ] = uploaded_file.name
+
+    except Exception as error:
+
+        progress.empty()
+
+        st.error(
+            "❌ Profiling failed."
+        )
+
+        st.exception(error)
+
+        st.stop()
+
+
+# ============================================================
+# GET STORED RESULT
+# ============================================================
+
+if "profile_result" not in st.session_state:
+
+    st.stop()
+
+
+result = st.session_state[
+    "profile_result"
+]
+
+
+# ============================================================
+# DATASET PROFILE
+# ============================================================
+
+dataset = result[
+    "dataset_profile"
+]
+
+
+st.markdown(
+    '<div class="section-title">'
+    '📊 Dataset Overview'
+    '</div>',
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# KPI CARDS
+# ============================================================
+
+c1, c2, c3, c4 = st.columns(4)
+
+with c1:
+
+    st.metric(
+        "Rows",
+        f"{dataset['number_of_rows']:,}",
+    )
+
+with c2:
+
+    st.metric(
+        "Columns",
+        f"{dataset['number_of_columns']:,}",
+    )
+
+with c3:
+
+    st.metric(
+        "Duplicate Rows",
+        f"{dataset['duplicate_row_count']:,}",
+    )
+
+with c4:
+
+    st.metric(
+        "Missing %",
+        f"{dataset['overall_missing_percentage']:.2f}%",
+    )
+
+
+# ============================================================
+# SECOND KPI ROW
+# ============================================================
+
+c1, c2, c3 = st.columns(3)
+
+with c1:
+
+    st.metric(
+        "Memory Usage",
+        f"{dataset['memory_usage_mb']:.2f} MB",
+    )
+
+with c2:
+
+    st.metric(
+        "Empty Rows",
+        f"{dataset['completely_empty_rows']:,}",
+    )
+
+with c3:
+
+    st.metric(
+        "Empty Columns",
+        f"{len(dataset['completely_empty_columns']):,}",
+    )
+
+
+# ============================================================
+# DATASET VISUALIZATION
+# ============================================================
+
+st.subheader(
+    "📈 Dataset Quality"
+)
+
+
+quality_data = pd.DataFrame(
+    {
+        "Metric": [
+            "Missing %",
+            "Duplicate %",
+            "Empty Row %",
+        ],
+        "Percentage": [
+            dataset[
+                "overall_missing_percentage"
+            ],
+            (
+                dataset[
+                    "duplicate_row_count"
+                ]
+                / max(
+                    dataset[
+                        "number_of_rows"
+                    ],
+                    1,
+                )
+                * 100
+            ),
+            (
+                dataset[
+                    "completely_empty_rows"
+                ]
+                / max(
+                    dataset[
+                        "number_of_rows"
+                    ],
+                    1,
+                )
+                * 100
+            ),
+        ],
+    }
+)
+
+
+st.bar_chart(
+    quality_data.set_index(
+        "Metric"
+    )
+)
+
+
+# ============================================================
+# COLUMN PROFILES
+# ============================================================
+
+column_profiles = result[
+    "column_profiles"
+]
+
+
+st.markdown(
+    '<div class="section-title">'
+    '🧩 Column Overview'
+    '</div>',
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# COLUMN SUMMARY TABLE
+# ============================================================
+
+column_rows = []
+
+
+for column_name, profile in (
+    column_profiles.items()
+):
+
+    column_rows.append(
+        {
+            "Column": column_name,
+            "Pandas Type": profile[
+                "pandas_dtype"
+            ],
+            "Semantic Type": profile[
+                "semantic_type"
+            ],
+            "Null Count": profile[
+                "null_count"
+            ],
+            "Null %": profile[
+                "null_percentage"
+            ],
+            "Unique Count": profile[
+                "unique_count"
+            ],
+            "Unique %": profile[
+                "unique_percentage"
+            ],
+        }
+    )
+
+
+column_df = pd.DataFrame(
+    column_rows
+)
+
+
+st.dataframe(
+    column_df,
+    use_container_width=True,
+    hide_index=True,
+)
+
+
+# ============================================================
+# SEMANTIC TYPE DISTRIBUTION
+# ============================================================
+
+st.subheader(
+    "🧠 Semantic Type Distribution"
+)
+
+
+semantic_counts = (
+    column_df[
+        "Semantic Type"
+    ]
+    .value_counts()
+)
+
+
+st.bar_chart(
+    semantic_counts
+)
+
+
+# ============================================================
+# NULL VALUES BY COLUMN
+# ============================================================
+
+st.subheader(
+    "🕳️ Missing Values by Column"
+)
+
+
+missing_df = (
+    column_df[
+        [
+            "Column",
+            "Null %",
+        ]
+    ]
+    .set_index("Column")
+)
+
+
+st.bar_chart(
+    missing_df
+)
+
+
+# ============================================================
+# DETAILED COLUMN PROFILES
+# ============================================================
+
+st.markdown(
+    '<div class="section-title">'
+    '🔍 Detailed Column Profiles'
+    '</div>',
+    unsafe_allow_html=True,
+)
+
+
+for column_name, profile in (
+    column_profiles.items()
+):
+
+    with st.expander(
+        f"📌 {column_name} — "
+        f"{profile['semantic_type']}"
+    ):
+
+        # ====================================================
+        # BASIC INFORMATION
+        # ====================================================
+
+        c1, c2, c3, c4 = st.columns(4)
+
+        with c1:
+
+            st.metric(
+                "Data Type",
+                profile[
+                    "pandas_dtype"
+                ],
+            )
+
+        with c2:
+
+            st.metric(
+                "Semantic Type",
+                profile[
+                    "semantic_type"
+                ],
+            )
+
+        with c3:
+
+            st.metric(
+                "Null Count",
+                profile[
+                    "null_count"
+                ],
+            )
+
+        with c4:
+
+            st.metric(
+                "Unique Count",
+                profile[
+                    "unique_count"
+                ],
+            )
+
+        # ====================================================
+        # NUMERICAL
+        # ====================================================
+
+        if (
+            profile[
+                "semantic_type"
+            ]
+            == "numeric"
+        ):
+
+            numerical = profile[
+                "numerical_profile"
+            ]
+
+            st.subheader(
+                "🔢 Numerical Statistics"
+            )
+
+            c1, c2, c3, c4 = st.columns(4)
+
+            with c1:
+
+                st.metric(
+                    "Minimum",
+                    numerical[
+                        "minimum"
+                    ],
+                )
+
+            with c2:
+
+                st.metric(
+                    "Maximum",
+                    numerical[
+                        "maximum"
+                    ],
+                )
+
+            with c3:
+
+                st.metric(
+                    "Mean",
+                    numerical[
+                        "mean"
+                    ],
+                )
+
+            with c4:
+
+                st.metric(
+                    "Median",
+                    numerical[
+                        "median"
+                    ],
+                )
+
+            c1, c2, c3, c4 = st.columns(4)
+
+            with c1:
+
+                st.metric(
+                    "Std. Deviation",
+                    numerical[
+                        "standard_deviation"
+                    ],
+                )
+
+            with c2:
+
+                st.metric(
+                    "Variance",
+                    numerical[
+                        "variance"
+                    ],
+                )
+
+            with c3:
+
+                st.metric(
+                    "IQR",
+                    numerical[
+                        "iqr"
+                    ],
+                )
+
+            with c4:
+
+                st.metric(
+                    "Outliers",
+                    numerical[
+                        "outlier_count"
+                    ],
+                )
+
+            # ------------------------------------------------
+            # QUANTILES
+            # ------------------------------------------------
+
+            st.write(
+                "### 📐 Quantiles"
+            )
+
+            quantile_data = pd.DataFrame(
                 {
-
-                    "Column":
-                        column_name,
-
-                    "Pandas dtype":
-                        info["dtype"],
-
-                    "Semantic type":
-                        info["semantic_type"],
-
-                    "Null count":
-                        info["null_count"],
-
-                    "Null %":
-                        info["null_percentage"],
-
-                    "Unique count":
-                        info["unique_count"],
-
-                    "Unique %":
-                        info["unique_percentage"],
-
-                    "Duplicate count":
-                        info["duplicate_count"],
-
-                    "Constant":
-                        info["constant"],
-
-                    "Near constant":
-                        info["near_constant"]
+                    "Percentile": list(
+                        numerical[
+                            "quantiles"
+                        ].keys()
+                    ),
+                    "Value": list(
+                        numerical[
+                            "quantiles"
+                        ].values()
+                    ),
                 }
             )
 
-        if column_rows:
-
             st.dataframe(
-                pd.DataFrame(
-                    column_rows
-                ),
-                use_container_width=True
+                quantile_data,
+                use_container_width=True,
+                hide_index=True,
             )
 
-        else:
+            # ------------------------------------------------
+            # QUANTILE CHART
+            # ------------------------------------------------
 
-            st.info(
-                "No matching columns found."
+            st.write(
+                "### 📊 Quantile Distribution"
             )
 
-
-        # -------------------------------------------------
-        # INDIVIDUAL COLUMN
-        # -------------------------------------------------
-
-        st.subheader(
-            "Column Details"
-        )
-
-        selected_column = st.selectbox(
-            "Select a column",
-            list(columns.keys())
-        )
-
-        selected_info = columns[
-            selected_column
-        ]
-
-        st.json(
-            selected_info
-        )
-
-
-    # =====================================================
-    # NUMERICAL TAB
-    # =====================================================
-
-    with numerical_tab:
-
-        st.header(
-            "Numerical Profiling"
-        )
-
-        numerical_columns = [
-
-            column
-
-            for column, info
-            in columns.items()
-
-            if info["semantic_type"]
-            == "numeric"
-        ]
-
-        if not numerical_columns:
-
-            st.info(
-                "No numerical columns detected."
+            st.line_chart(
+                quantile_data.set_index(
+                    "Percentile"
+                )
             )
 
-        else:
+        # ====================================================
+        # CATEGORICAL
+        # ====================================================
 
-            selected_column = st.selectbox(
-                "Select numerical column",
-                numerical_columns
-            )
+        elif (
+            profile[
+                "semantic_type"
+            ]
+            == "categorical"
+        ):
 
-            info = columns[
-                selected_column
+            categorical = profile[
+                "categorical_profile"
             ]
 
-            statistics = info.get(
-                "numeric_statistics",
-                {}
-            )
-
-
-            # -------------------------------------------------
-            # BASIC STATISTICS
-            # -------------------------------------------------
-
             st.subheader(
-                "Basic Statistics"
+                "🏷️ Categorical Statistics"
             )
 
-            col1, col2, col3 = (
-                st.columns(3)
-            )
+            c1, c2 = st.columns(2)
 
-            col1.metric(
-                "Minimum",
-                statistics.get(
-                    "min"
+            with c1:
+
+                st.metric(
+                    "Unique Values",
+                    categorical[
+                        "unique_values"
+                    ],
                 )
-            )
 
-            col2.metric(
-                "Maximum",
-                statistics.get(
-                    "max"
+            with c2:
+
+                st.metric(
+                    "Unique %",
+                    f"{categorical['unique_percentage']:.2f}%",
                 )
-            )
 
-            col3.metric(
-                "Mean",
-                statistics.get(
-                    "mean"
-                )
-            )
+            # ------------------------------------------------
+            # TOP VALUES
+            # ------------------------------------------------
 
-
-            col4, col5, col6 = (
-                st.columns(3)
-            )
-
-            col4.metric(
-                "Median",
-                statistics.get(
-                    "median"
-                )
-            )
-
-            col5.metric(
-                "Standard Deviation",
-                statistics.get(
-                    "std"
-                )
-            )
-
-            col6.metric(
-                "Variance",
-                statistics.get(
-                    "variance"
-                )
-            )
-
-
-            # -------------------------------------------------
-            # QUARTILES
-            # -------------------------------------------------
-
-            st.subheader(
-                "Quartiles"
-            )
-
-            col1, col2, col3, col4 = (
-                st.columns(4)
-            )
-
-            col1.metric(
-                "Q1",
-                statistics.get(
-                    "q1"
-                )
-            )
-
-            col2.metric(
-                "Q2",
-                statistics.get(
-                    "q2"
-                )
-            )
-
-            col3.metric(
-                "Q3",
-                statistics.get(
-                    "q3"
-                )
-            )
-
-            col4.metric(
-                "IQR",
-                statistics.get(
-                    "iqr"
-                )
-            )
-
-
-            # -------------------------------------------------
-            # PERCENTILES
-            # -------------------------------------------------
-
-            st.subheader(
-                "Percentiles"
-            )
-
-            percentile_data = pd.DataFrame(
-                [
-                    {
-                        "Percentile":
-                            percentile,
-
-                        "Value":
-                            value
-                    }
-
-                    for percentile, value
-                    in statistics.get(
-                        "percentiles",
-                        {}
-                    ).items()
+            top_values = pd.DataFrame(
+                categorical[
+                    "most_frequent_values"
                 ]
             )
 
-            st.dataframe(
-                percentile_data,
-                use_container_width=True
-            )
+            if not top_values.empty:
 
-
-            # -------------------------------------------------
-            # OUTLIERS
-            # -------------------------------------------------
-
-            st.subheader(
-                "IQR Outliers"
-            )
-
-            outliers = statistics.get(
-                "outliers",
-                {}
-            )
-
-            col1, col2, col3 = (
-                st.columns(3)
-            )
-
-            col1.metric(
-                "Outlier Count",
-                outliers.get(
-                    "count",
-                    0
-                )
-            )
-
-            col2.metric(
-                "Outlier %",
-                outliers.get(
-                    "percentage",
-                    0
-                )
-            )
-
-            col3.metric(
-                "Method",
-                outliers.get(
-                    "method",
-                    "IQR"
-                )
-            )
-
-
-    # =====================================================
-    # CATEGORICAL TAB
-    # =====================================================
-
-    with categorical_tab:
-
-        st.header(
-            "Categorical Profiling"
-        )
-
-        categorical_columns = [
-
-            column
-
-            for column, info
-            in columns.items()
-
-            if info["semantic_type"]
-            == "categorical"
-        ]
-
-        if not categorical_columns:
-
-            st.info(
-                "No categorical columns detected."
-            )
-
-        else:
-
-            selected_column = st.selectbox(
-                "Select categorical column",
-                categorical_columns
-            )
-
-            info = columns[
-                selected_column
-            ]
-
-            categorical_statistics = info.get(
-                "categorical_statistics",
-                {}
-            )
-
-
-            # -------------------------------------------------
-            # UNIQUE VALUES
-            # -------------------------------------------------
-
-            st.subheader(
-                "Unique Values"
-            )
-
-            col1, col2 = (
-                st.columns(2)
-            )
-
-            col1.metric(
-                "Unique Values",
-                categorical_statistics.get(
-                    "unique_values",
-                    0
-                )
-            )
-
-            col2.metric(
-                "Unique Percentage",
-                f'{categorical_statistics.get(
-                    "unique_percentage",
-                    0
-                )}%'
-            )
-
-
-            # -------------------------------------------------
-            # MOST FREQUENT VALUES
-            # -------------------------------------------------
-
-            st.subheader(
-                "Most Frequent Values"
-            )
-
-            most_frequent_values = (
-                categorical_statistics.get(
-                    "most_frequent_values",
-                    []
-                )
-            )
-
-            if most_frequent_values:
-
-                frequency_data = pd.DataFrame(
-                    most_frequent_values
+                st.write(
+                    "### 🏆 Most Frequent Values"
                 )
 
                 st.dataframe(
-                    frequency_data,
-                    use_container_width=True
+                    top_values,
+                    use_container_width=True,
+                    hide_index=True,
                 )
 
-            else:
+                # --------------------------------------------
+                # FREQUENCY CHART
+                # --------------------------------------------
 
-                st.info(
-                    "No categorical values found."
-                )
+                if (
+                    "value" in top_values.columns
+                    and
+                    "frequency"
+                    in top_values.columns
+                ):
+
+                    chart_data = (
+                        top_values[
+                            [
+                                "value",
+                                "frequency",
+                            ]
+                        ]
+                        .set_index("value")
+                    )
+
+                    st.bar_chart(
+                        chart_data
+                    )
 
 
-    # =====================================================
-    # JSON TAB
-    # =====================================================
+# ============================================================
+# EXPORT
+# ============================================================
 
-    with json_tab:
+st.markdown(
+    '<div class="section-title">'
+    '📥 Export Report'
+    '</div>',
+    unsafe_allow_html=True,
+)
 
-        st.header(
-            "Generated JSON Profile"
-        )
 
-        json_profile = json.dumps(
-            profile,
-            indent=2,
-            default=str
-        )
+# ============================================================
+# JSON
+# ============================================================
 
-        # -------------------------------------------------
-        # DOWNLOAD
-        # -------------------------------------------------
+json_data = json.dumps(
+    result,
+    indent=4,
+    default=str,
+)
 
-        st.download_button(
-            label="⬇️ Download JSON Profile",
 
-            data=json_profile,
+download_name = (
+    st.session_state[
+        "profile_filename"
+    ]
+    .rsplit(".", 1)[0]
+    + "_profile.json"
+)
 
-            file_name="profile.json",
 
-            mime="application/json"
-        )
+st.download_button(
+    label="📥 Download Complete Profile (.JSON)",
+    data=json_data,
+    file_name=download_name,
+    mime="application/json",
+    type="primary",
+    use_container_width=True,
+)
 
-        # -------------------------------------------------
-        # DISPLAY
-        # -------------------------------------------------
 
-        st.code(
-            json_profile,
-            language="json"
-        )
+st.caption(
+    "The downloaded JSON contains the complete "
+    "dataset-level and column-level profiling results."
+)

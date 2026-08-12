@@ -1,173 +1,246 @@
-import numpy as np
-import pandas as pd
+import math
 
-from utils.statistics import (
-    clean_value,
-    percentage
-)
+import pandas as pd
 
 
 class NumericProfiler:
 
-    PERCENTILES = [
-        1,
-        5,
-        10,
-        25,
-        50,
-        75,
-        90,
-        95,
-        99
-    ]
+    def __init__(self):
 
-    def profile(
+        self.count = 0
+        self.sum = 0.0
+
+        self.mean = 0.0
+        self.m2 = 0.0
+
+        self.minimum = None
+        self.maximum = None
+
+        self.values = []
+
+    def process_batch(
         self,
-        series: pd.Series
-    ) -> dict:
+        series: pd.Series,
+    ) -> None:
 
         numeric = pd.to_numeric(
             series,
-            errors="coerce"
+            errors="coerce",
         ).dropna()
 
         if numeric.empty:
+            return
+
+        values = (
+            numeric
+            .astype(float)
+            .tolist()
+        )
+
+        self.values.extend(values)
+
+        batch_min = min(values)
+        batch_max = max(values)
+
+        if self.minimum is None:
+            self.minimum = batch_min
+        else:
+            self.minimum = min(
+                self.minimum,
+                batch_min,
+            )
+
+        if self.maximum is None:
+            self.maximum = batch_max
+        else:
+            self.maximum = max(
+                self.maximum,
+                batch_max,
+            )
+
+        for value in values:
+
+            self.count += 1
+
+            delta = (
+                value
+                - self.mean
+            )
+
+            self.mean += (
+                delta
+                / self.count
+            )
+
+            delta2 = (
+                value
+                - self.mean
+            )
+
+            self.m2 += (
+                delta
+                * delta2
+            )
+
+        self.sum += sum(values)
+
+    def finalize(self) -> dict:
+
+        if self.count == 0:
 
             return {
-
-                "min": None,
-
-                "max": None,
-
+                "minimum": None,
+                "maximum": None,
                 "mean": None,
-
                 "median": None,
-
-                "std": None,
-
+                "standard_deviation": None,
                 "variance": None,
-
-                "percentiles": {
-                    str(p): None
-                    for p in self.PERCENTILES
-                },
-
-                "q1": None,
-
-                "q2": None,
-
-                "q3": None,
-
+                "quantiles": {},
                 "iqr": None,
-
-                "outliers": {
-                    "count": 0,
-                    "percentage": 0.0,
-                    "method": "IQR"
-                }
+                "outlier_count": 0,
             }
 
-        q1 = numeric.quantile(0.25)
+        variance = (
+            self.m2
+            / (self.count - 1)
+            if self.count > 1
+            else 0.0
+        )
 
-        q2 = numeric.quantile(0.50)
+        standard_deviation = math.sqrt(
+            variance
+        )
 
-        q3 = numeric.quantile(0.75)
+        sorted_values = sorted(
+            self.values
+        )
+
+        quantiles = {
+            "1%": self._quantile(
+                sorted_values,
+                0.01,
+            ),
+            "5%": self._quantile(
+                sorted_values,
+                0.05,
+            ),
+            "10%": self._quantile(
+                sorted_values,
+                0.10,
+            ),
+            "25%": self._quantile(
+                sorted_values,
+                0.25,
+            ),
+            "50%": self._quantile(
+                sorted_values,
+                0.50,
+            ),
+            "75%": self._quantile(
+                sorted_values,
+                0.75,
+            ),
+            "90%": self._quantile(
+                sorted_values,
+                0.90,
+            ),
+            "95%": self._quantile(
+                sorted_values,
+                0.95,
+            ),
+            "99%": self._quantile(
+                sorted_values,
+                0.99,
+            ),
+        }
+
+        q1 = quantiles["25%"]
+        q2 = quantiles["50%"]
+        q3 = quantiles["75%"]
 
         iqr = q3 - q1
 
-        lower_bound = q1 - (
-            1.5 * iqr
+        lower_bound = (
+            q1 - 1.5 * iqr
         )
 
-        upper_bound = q3 + (
-            1.5 * iqr
+        upper_bound = (
+            q3 + 1.5 * iqr
         )
 
-        outliers = numeric[
-            (numeric < lower_bound)
-            |
-            (numeric > upper_bound)
-        ]
+        outlier_count = sum(
+            1
+            for value in self.values
+            if (
+                value < lower_bound
+                or value > upper_bound
+            )
+        )
 
         return {
-
-            "min":
-                clean_value(
-                    numeric.min()
-                ),
-
-            "max":
-                clean_value(
-                    numeric.max()
-                ),
-
-            "mean":
-                clean_value(
-                    numeric.mean()
-                ),
-
-            "median":
-                clean_value(
-                    numeric.median()
-                ),
-
-            "std":
-                clean_value(
-                    numeric.std()
-                ),
-
-            "variance":
-                clean_value(
-                    numeric.var()
-                ),
-
-            "percentiles": {
-
-                str(p):
-                    clean_value(
-                        np.percentile(
-                            numeric,
-                            p
-                        )
-                    )
-
-                for p in self.PERCENTILES
-            },
-
-            "q1":
-                clean_value(q1),
-
-            "q2":
-                clean_value(q2),
-
-            "q3":
-                clean_value(q3),
-
-            "iqr":
-                clean_value(iqr),
-
-            "outliers": {
-
-                "count":
-                    int(len(outliers)),
-
-                "percentage":
-                    percentage(
-                        len(outliers),
-                        len(numeric)
-                    ),
-
-                "method":
-                    "IQR",
-
-                "lower_bound":
-                    clean_value(
-                        lower_bound
-                    ),
-
-                "upper_bound":
-                    clean_value(
-                        upper_bound
-                    )
-            }
+            "minimum": self.minimum,
+            "maximum": self.maximum,
+            "mean": round(
+                self.mean,
+                4,
+            ),
+            "median": q2,
+            "standard_deviation": round(
+                standard_deviation,
+                4,
+            ),
+            "variance": round(
+                variance,
+                4,
+            ),
+            "quantiles": quantiles,
+            "iqr": iqr,
+            "outlier_count": outlier_count,
         }
+
+    @staticmethod
+    def _quantile(
+        sorted_values,
+        q,
+    ):
+
+        if not sorted_values:
+            return 0.0
+
+        position = (
+            len(sorted_values) - 1
+        ) * q
+
+        lower = int(
+            math.floor(position)
+        )
+
+        upper = int(
+            math.ceil(position)
+        )
+
+        if lower == upper:
+            return sorted_values[
+                lower
+            ]
+
+        lower_value = (
+            sorted_values[lower]
+        )
+
+        upper_value = (
+            sorted_values[upper]
+        )
+
+        fraction = (
+            position - lower
+        )
+
+        return (
+            lower_value
+            + (
+                upper_value
+                - lower_value
+            )
+            * fraction
+        )
