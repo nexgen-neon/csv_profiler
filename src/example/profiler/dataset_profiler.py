@@ -1,154 +1,116 @@
-import pandas as pd
-
-
 class DatasetProfiler:
 
     def __init__(self):
 
-        self.row_count = 0
-        self.column_count = 0
+        self.total_rows = 0
+        self.total_columns = 0
 
-        self.memory_usage = 0
+        self.memory_usage_bytes = 0
 
-        self.duplicate_row_count = 0
-
-        self.empty_row_count = 0
-
-        self.null_count = 0
         self.total_cells = 0
+        self.total_missing_values = 0
 
-        self.non_null_by_column = {}
+        self.empty_rows = 0
 
-        self.seen_row_hashes = set()
+        self.empty_columns = set()
 
-    def initialize_columns(
-        self,
-        columns,
-    ):
+        self.column_names = []
 
-        self.column_count = len(
-            columns
-        )
+        self.initialized = False
 
-        for column in columns:
+    def process_batch(self, dataframe):
 
-            self.non_null_by_column[
-                column
-            ] = 0
+        if dataframe is None:
+            return
 
-    def process_batch(
-        self,
-        batch: pd.DataFrame,
-    ):
+        if not self.initialized:
 
-        self.row_count += len(
-            batch
-        )
+            self.column_names = list(
+                dataframe.columns
+            )
+
+            self.total_columns = len(
+                self.column_names
+            )
+
+            self.initialized = True
+
+        if dataframe.empty:
+            return
+
+        rows = len(dataframe)
+
+        self.total_rows += rows
 
         self.total_cells += (
-            batch.size
+            rows * self.total_columns
         )
 
-        self.memory_usage += int(
-            batch.memory_usage(
-                deep=True
+        self.memory_usage_bytes += int(
+            dataframe.memory_usage(
+                index=True,
+                deep=True,
             ).sum()
         )
 
-        self.null_count += int(
-            batch.isna()
-            .sum()
-            .sum()
+        missing = dataframe.isna()
+
+        self.total_missing_values += int(
+            missing.sum().sum()
         )
 
-        self.empty_row_count += int(
-            batch.isna()
-            .all(axis=1)
-            .sum()
+        self.empty_rows += int(
+            missing.all(axis=1).sum()
         )
 
-        non_null_counts = (
-            batch.notna().sum()
+        empty_columns = (
+            dataframe.columns[
+                missing.all(axis=0)
+            ]
         )
 
-        for column, count in (
-            non_null_counts.items()
-        ):
-
-            self.non_null_by_column[
-                column
-            ] += int(count)
-
-        row_hashes = (
-            pd.util.hash_pandas_object(
-                batch,
-                index=False,
-            )
+        self.empty_columns.update(
+            empty_columns.tolist()
         )
-
-        for row_hash in row_hashes:
-
-            row_hash = int(
-                row_hash
-            )
-
-            if (
-                row_hash
-                in self.seen_row_hashes
-            ):
-
-                self.duplicate_row_count += 1
-
-            else:
-
-                self.seen_row_hashes.add(
-                    row_hash
-                )
 
     def finalize(self):
 
-        completely_empty_columns = [
-            column
-            for (
-                column,
-                non_null_count,
-            )
-            in self.non_null_by_column.items()
-            if non_null_count == 0
-        ]
+        if self.total_cells:
 
-        missing_percentage = (
-            (
-                self.null_count
+            missing_percentage = (
+                self.total_missing_values
                 / self.total_cells
+                * 100
             )
-            * 100
-            if self.total_cells
-            else 0.0
-        )
+
+        else:
+
+            missing_percentage = 0.0
 
         return {
-            "number_of_rows": self.row_count,
-            "number_of_columns": self.column_count,
-            "memory_usage_bytes": self.memory_usage,
-            "memory_usage_mb": round(
-                self.memory_usage
-                / (1024 * 1024),
-                2,
-            ),
-            "duplicate_row_count": (
-                self.duplicate_row_count
-            ),
-            "completely_empty_rows": (
-                self.empty_row_count
-            ),
-            "completely_empty_columns": (
-                completely_empty_columns
-            ),
-            "overall_missing_percentage": (
-                round(
-                    missing_percentage,
-                    2,
-                )
-            ),
+
+            "rows": self.total_rows,
+
+            "columns": self.total_columns,
+
+            "memory_usage_bytes":
+                self.memory_usage_bytes,
+
+            "memory_usage_mb":
+                self.memory_usage_bytes
+                / (1024 ** 2),
+
+            "completely_empty_rows":
+                self.empty_rows,
+
+            "completely_empty_columns":
+                sorted(
+                    self.empty_columns
+                ),
+
+            "missing_values":
+                self.total_missing_values,
+
+            "overall_missing_percentage":
+                missing_percentage,
         }

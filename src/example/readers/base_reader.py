@@ -1,32 +1,26 @@
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from typing import Iterator
 
 import pandas as pd
 
 
 class BaseReader(ABC):
-    """
-    Base interface for all data readers.
-
-    Readers must support:
-    - normal reading for smaller datasets
-    - batch reading for large datasets
-    """
 
     @abstractmethod
     def read(self) -> pd.DataFrame:
-        """Read the complete dataset."""
+        """
+        Read the complete dataset.
+
+        Intended primarily for small datasets.
+        """
         raise NotImplementedError
 
     @abstractmethod
     def read_batches(
         self,
-        batch_size_mb: int = 1000,
+        chunksize: int | None = None,
     ) -> Iterator[pd.DataFrame]:
         """
-        Read the dataset in batches.
-
-        batch_size_mb represents the target raw input
-        size of each batch.
+        Read the dataset incrementally.
         """
         raise NotImplementedError

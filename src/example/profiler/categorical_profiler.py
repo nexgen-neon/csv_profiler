@@ -1,103 +1,137 @@
 from collections import Counter
 
-import pandas as pd
-
 
 class CategoricalProfiler:
-    """
-    Streaming categorical profiler.
 
-    Calculates:
+    MAX_UNIQUE_TRACKED = 100_000
 
-    - Unique values
-    - Unique percentage
-    - Most frequent values
-    - Frequency
-    - Frequency percentage
-    """
+    def __init__(self, top_n=5):
 
-    def __init__(self, top_n: int = 5):
         self.top_n = top_n
 
-        self.value_counts = Counter()
-
         self.total_count = 0
-        self.non_null_count = 0
+        self.null_count = 0
 
-    def process_batch(
-        self,
-        series: pd.Series,
-    ) -> None:
+        self.unique_values = set()
+
+        self.frequency = Counter()
+
+        self.high_cardinality = False
+
+    def process(self, series):
 
         self.total_count += len(series)
 
-        non_null = series.dropna()
-
-        self.non_null_count += len(
-            non_null
+        self.null_count += int(
+            series.isna().sum()
         )
 
-        counts = Counter(
-            non_null.astype(str).tolist()
+        values = (
+            series
+            .dropna()
+            .astype(str)
         )
 
-        self.value_counts.update(
-            counts
+        if values.empty:
+            return
+
+        # Track frequency.
+        counts = values.value_counts()
+
+        for value, count in counts.items():
+
+            self.frequency[value] += int(
+                count
+            )
+
+        # Track unique values with a hard memory bound.
+        new_values = values.unique()
+
+        remaining = (
+            self.MAX_UNIQUE_TRACKED
+            - len(self.unique_values)
         )
 
-    def finalize(self) -> dict:
+        if remaining <= 0:
 
-        unique_values = len(
-            self.value_counts
+            self.high_cardinality = True
+
+            return
+
+        if len(new_values) > remaining:
+
+            new_values = (
+                new_values[:remaining]
+            )
+
+            self.high_cardinality = True
+
+        self.unique_values.update(
+            new_values.tolist()
+        )
+
+    def finalize(self):
+
+        unique_count = len(
+            self.unique_values
         )
 
         unique_percentage = (
-            (
-                unique_values
-                / self.non_null_count
-            )
+            unique_count
+            / self.total_count
             * 100
-            if self.non_null_count
+            if self.total_count
             else 0.0
         )
 
-        top_values = (
-            self.value_counts
-            .most_common(self.top_n)
+        non_null_count = (
+            self.total_count
+            - self.null_count
         )
 
-        most_frequent_values = []
+        top_values = []
 
-        for value, frequency in top_values:
+        for value, count in (
+            self.frequency.most_common(
+                self.top_n
+            )
+        ):
 
-            frequency_percentage = (
-                (
-                    frequency
-                    / self.non_null_count
-                )
+            percentage = (
+                count
+                / non_null_count
                 * 100
-                if self.non_null_count
+                if non_null_count
                 else 0.0
             )
 
-            most_frequent_values.append(
+            top_values.append(
                 {
                     "value": value,
-                    "frequency": frequency,
-                    "frequency_percentage": round(
-                        frequency_percentage,
-                        2,
-                    ),
+                    "frequency": count,
+                    "frequency_percentage":
+                        percentage,
                 }
             )
 
         return {
-            "unique_values": unique_values,
-            "unique_percentage": round(
+
+            "unique_values":
+                unique_count,
+
+            "unique_percentage":
                 unique_percentage,
-                2,
-            ),
-            "most_frequent_values": (
-                most_frequent_values
-            ),
+
+            "most_frequent_values":
+                top_values,
+
+            "high_cardinality":
+                self.high_cardinality,
+
+            "unique_count_note":
+                (
+                    "Exact while below the "
+                    "tracking limit; bounded "
+                    "when high-cardinality."
+                ),
         }

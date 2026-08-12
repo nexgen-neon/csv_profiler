@@ -1,50 +1,68 @@
 import pandas as pd
 
-from .categorical_profiler import CategoricalProfiler
-from .numeric_profiler import NumericProfiler
+from example.profiler.categorical_profiler import (
+    CategoricalProfiler,
+)
+
+from example.profiler.numeric_profiler import (
+    NumericalProfiler,
+)
 
 
 class ColumnProfiler:
 
+    IDENTIFIER_KEYWORDS = (
+        "id",
+        "identifier",
+        "key",
+        "code",
+    )
+
     def __init__(
         self,
-        column_name: str,
-        pandas_dtype: str,
-        top_n: int = 5,
+        column_name,
+        first_series,
+        top_n=5,
     ):
 
-        self.column_name = column_name
-        self.pandas_dtype = pandas_dtype
+        self.column_name = (
+            column_name
+        )
 
-        self.top_n = top_n
+        self.dtype = str(
+            first_series.dtype
+        )
+
+        self.semantic_type = (
+            self.detect_semantic_type(
+                first_series
+            )
+        )
 
         self.total_count = 0
         self.null_count = 0
 
         self.unique_values = set()
 
-        self.semantic_type = (
-            self._detect_semantic_type(
-                pandas_dtype
-            )
-        )
+        self.MAX_UNIQUE_TRACKED = 100_000
 
-        self.numeric_profiler = None
+        self.high_cardinality = False
+
+        self.frequency = {}
+
+        self.top_n = top_n
+
+        self.numerical_profiler = None
+
         self.categorical_profiler = None
 
-        if (
-            self.semantic_type
-            == "numeric"
-        ):
+        if self.semantic_type == "numeric":
 
-            self.numeric_profiler = (
-                NumericProfiler()
+            self.numerical_profiler = (
+                NumericalProfiler()
             )
 
-        elif (
-            self.semantic_type
-            == "categorical"
-        ):
+        elif self.semantic_type == "categorical":
 
             self.categorical_profiler = (
                 CategoricalProfiler(
@@ -52,139 +70,150 @@ class ColumnProfiler:
                 )
             )
 
-    def process_batch(
-        self,
-        series: pd.Series,
-    ) -> None:
+    @classmethod
+    def detect_semantic_type(
+        cls,
+        series,
+    ):
 
-        self.total_count += len(
-            series
-        )
+        dtype = series.dtype
+
+        if pd.api.types.is_bool_dtype(
+            dtype
+        ):
+            return "boolean"
+
+        if pd.api.types.is_datetime64_any_dtype(
+            dtype
+        ):
+            return "datetime"
+
+        if pd.api.types.is_numeric_dtype(
+            dtype
+        ):
+
+            name = str(
+                series.name
+            ).lower()
+
+            if any(
+                keyword in name
+                for keyword
+                in cls.IDENTIFIER_KEYWORDS
+            ):
+                return "identifier"
+
+            return "numeric"
+
+        if pd.api.types.is_object_dtype(
+            dtype
+        ) or pd.api.types.is_string_dtype(
+            dtype
+        ):
+
+            name = str(
+                series.name
+            ).lower()
+
+            if any(
+                keyword in name
+                for keyword
+                in cls.IDENTIFIER_KEYWORDS
+            ):
+
+                return "identifier"
+
+            values = (
+                series
+                .dropna()
+                .astype(str)
+            )
+
+            if values.empty:
+                return "categorical"
+
+            unique_ratio = (
+                values.nunique()
+                / len(values)
+            )
+
+            average_length = (
+                values.str.len().mean()
+            )
+
+            if (
+                unique_ratio > 0.5
+                and average_length > 30
+            ):
+
+                return "text"
+
+            return "categorical"
+
+        return "categorical"
+
+    def process(self, series):
+
+        self.total_count += len(series)
 
         self.null_count += int(
             series.isna().sum()
         )
 
-        non_null = series.dropna()
+        if self.numerical_profiler:
 
-        self.unique_values.update(
-            non_null.astype(str).tolist()
-        )
-
-        if (
-            self.semantic_type
-            == "numeric"
-        ):
-
-            self.numeric_profiler.process_batch(
+            self.numerical_profiler.process(
                 series
             )
 
-        elif (
-            self.semantic_type
-            == "categorical"
-        ):
+        if self.categorical_profiler:
 
-            self.categorical_profiler.process_batch(
+            self.categorical_profiler.process(
                 series
             )
 
-    def finalize(self) -> dict:
+    def finalize(self):
 
         null_percentage = (
-            (
-                self.null_count
-                / self.total_count
-            )
-            * 100
-            if self.total_count
-            else 0.0
-        )
-
-        unique_count = len(
-            self.unique_values
-        )
-
-        unique_percentage = (
-            (
-                unique_count
-                / self.total_count
-            )
+            self.null_count
+            / self.total_count
             * 100
             if self.total_count
             else 0.0
         )
 
         result = {
-            "column_name": self.column_name,
-            "pandas_dtype": self.pandas_dtype,
-            "semantic_type": self.semantic_type,
-            "null_count": self.null_count,
-            "null_percentage": round(
+
+            "column_name":
+                self.column_name,
+
+            "pandas_dtype":
+                self.dtype,
+
+            "semantic_type":
+                self.semantic_type,
+
+            "null_count":
+                self.null_count,
+
+            "null_percentage":
                 null_percentage,
-                2,
-            ),
-            "unique_count": unique_count,
-            "unique_percentage": round(
-                unique_percentage,
-                2,
-            ),
         }
 
-        if (
-            self.semantic_type
-            == "numeric"
-        ):
+        if self.numerical_profiler:
 
             result[
-                "numerical_profile"
+                "statistics"
             ] = (
-                self.numeric_profiler.finalize()
+                self.numerical_profiler.finalize()
             )
 
-        elif (
-            self.semantic_type
-            == "categorical"
-        ):
+        if self.categorical_profiler:
 
             result[
-                "categorical_profile"
+                "categorical"
             ] = (
                 self.categorical_profiler.finalize()
             )
 
         return result
-
-    @staticmethod
-    def _detect_semantic_type(
-        pandas_dtype: str,
-    ) -> str:
-
-        dtype = str(
-            pandas_dtype
-        ).lower()
-
-        if "bool" in dtype:
-            return "boolean"
-
-        if (
-            "int" in dtype
-            or "float" in dtype
-            or "complex" in dtype
-        ):
-            return "numeric"
-
-        if (
-            "datetime" in dtype
-            or "date" in dtype
-        ):
-            return "datetime"
-
-        if (
-            "object" in dtype
-            or "string" in dtype
-            or "category" in dtype
-        ):
-            return "categorical"
-
-        return "categorical"

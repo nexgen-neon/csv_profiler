@@ -1,90 +1,117 @@
-import math
+import random
 
+import numpy as np
 import pandas as pd
 
 
-class NumericProfiler:
+class NumericalProfiler:
+
+    RESERVOIR_SIZE = 100_000
 
     def __init__(self):
 
         self.count = 0
-        self.sum = 0.0
 
-        self.mean = 0.0
-        self.m2 = 0.0
+        self.null_count = 0
 
         self.minimum = None
         self.maximum = None
 
-        self.values = []
+        self.sum = 0.0
+        self.sum_squared = 0.0
 
-    def process_batch(
-        self,
-        series: pd.Series,
-    ) -> None:
+        self.reservoir = []
 
-        numeric = pd.to_numeric(
+    def process(self, series):
+
+        self.null_count += int(
+            series.isna().sum()
+        )
+
+        values = pd.to_numeric(
             series,
             errors="coerce",
         ).dropna()
 
-        if numeric.empty:
+        if values.empty:
             return
 
-        values = (
-            numeric
-            .astype(float)
-            .tolist()
+        array = values.to_numpy(
+            dtype=float
         )
 
-        self.values.extend(values)
+        batch_count = len(array)
 
-        batch_min = min(values)
-        batch_max = max(values)
+        self.count += batch_count
+
+        batch_min = float(
+            np.min(array)
+        )
+
+        batch_max = float(
+            np.max(array)
+        )
 
         if self.minimum is None:
+
             self.minimum = batch_min
+
         else:
+
             self.minimum = min(
                 self.minimum,
                 batch_min,
             )
 
         if self.maximum is None:
+
             self.maximum = batch_max
+
         else:
+
             self.maximum = max(
                 self.maximum,
                 batch_max,
             )
 
-        for value in values:
+        self.sum += float(
+            np.sum(array)
+        )
 
-            self.count += 1
+        self.sum_squared += float(
+            np.sum(
+                array * array
+            )
+        )
 
-            delta = (
-                value
-                - self.mean
+        self._update_reservoir(
+            array
+        )
+
+    def _update_reservoir(self, array):
+
+        for value in array:
+
+            if len(self.reservoir) < self.RESERVOIR_SIZE:
+
+                self.reservoir.append(
+                    float(value)
+                )
+
+                continue
+
+            position = random.randint(
+                0,
+                self.count - 1,
             )
 
-            self.mean += (
-                delta
-                / self.count
-            )
+            if position < self.RESERVOIR_SIZE:
 
-            delta2 = (
-                value
-                - self.mean
-            )
+                self.reservoir[position] = (
+                    float(value)
+                )
 
-            self.m2 += (
-                delta
-                * delta2
-            )
-
-        self.sum += sum(values)
-
-    def finalize(self) -> dict:
+    def finalize(self):
 
         if self.count == 0:
 
@@ -97,66 +124,51 @@ class NumericProfiler:
                 "variance": None,
                 "quantiles": {},
                 "iqr": None,
-                "outlier_count": 0,
+                "outliers": {
+                    "count": 0,
+                    "method": "IQR",
+                },
             }
 
-        variance = (
-            self.m2
-            / (self.count - 1)
-            if self.count > 1
-            else 0.0
+        mean = (
+            self.sum
+            / self.count
         )
 
-        standard_deviation = math.sqrt(
-            variance
+        variance = max(
+            (
+                self.sum_squared
+                / self.count
+            )
+            - (mean * mean),
+            0.0,
         )
 
-        sorted_values = sorted(
-            self.values
+        std = variance ** 0.5
+
+        sample = np.asarray(
+            self.reservoir,
+            dtype=float,
         )
 
-        quantiles = {
-            "1%": self._quantile(
-                sorted_values,
-                0.01,
-            ),
-            "5%": self._quantile(
-                sorted_values,
-                0.05,
-            ),
-            "10%": self._quantile(
-                sorted_values,
-                0.10,
-            ),
-            "25%": self._quantile(
-                sorted_values,
-                0.25,
-            ),
-            "50%": self._quantile(
-                sorted_values,
-                0.50,
-            ),
-            "75%": self._quantile(
-                sorted_values,
-                0.75,
-            ),
-            "90%": self._quantile(
-                sorted_values,
-                0.90,
-            ),
-            "95%": self._quantile(
-                sorted_values,
-                0.95,
-            ),
-            "99%": self._quantile(
-                sorted_values,
-                0.99,
-            ),
-        }
+        percentiles = np.percentile(
+            sample,
+            [
+                1,
+                5,
+                10,
+                25,
+                50,
+                75,
+                90,
+                95,
+                99,
+            ],
+        )
 
-        q1 = quantiles["25%"]
-        q2 = quantiles["50%"]
-        q3 = quantiles["75%"]
+        q1 = float(percentiles[3])
+        q2 = float(percentiles[4])
+        q3 = float(percentiles[5])
 
         iqr = q3 - q1
 
@@ -168,79 +180,83 @@ class NumericProfiler:
             q3 + 1.5 * iqr
         )
 
-        outlier_count = sum(
-            1
-            for value in self.values
-            if (
-                value < lower_bound
-                or value > upper_bound
+        outlier_count = int(
+            np.sum(
+                (sample < lower_bound)
+                |
+                (sample > upper_bound)
             )
         )
 
         return {
-            "minimum": self.minimum,
-            "maximum": self.maximum,
-            "mean": round(
-                self.mean,
-                4,
-            ),
-            "median": q2,
-            "standard_deviation": round(
-                standard_deviation,
-                4,
-            ),
-            "variance": round(
+
+            "minimum":
+                self.minimum,
+
+            "maximum":
+                self.maximum,
+
+            "mean":
+                mean,
+
+            "median":
+                q2,
+
+            "standard_deviation":
+                std,
+
+            "variance":
                 variance,
-                4,
-            ),
-            "quantiles": quantiles,
+
+            "quantiles": {
+
+                "1%":
+                    float(percentiles[0]),
+
+                "5%":
+                    float(percentiles[1]),
+
+                "10%":
+                    float(percentiles[2]),
+
+                "25%":
+                    q1,
+
+                "50%":
+                    q2,
+
+                "75%":
+                    q3,
+
+                "90%":
+                    float(percentiles[6]),
+
+                "95%":
+                    float(percentiles[7]),
+
+                "99%":
+                    float(percentiles[8]),
+            },
+
+            "q1": q1,
+
+            "q2": q2,
+
+            "q3": q3,
+
             "iqr": iqr,
-            "outlier_count": outlier_count,
+
+            "outliers": {
+
+                "count":
+                    outlier_count,
+
+                "method":
+                    "IQR",
+            },
+
+            "quantiles_note":
+                "Quantiles and IQR outliers "
+                "are estimated from a bounded "
+                "reservoir sample.",
         }
-
-    @staticmethod
-    def _quantile(
-        sorted_values,
-        q,
-    ):
-
-        if not sorted_values:
-            return 0.0
-
-        position = (
-            len(sorted_values) - 1
-        ) * q
-
-        lower = int(
-            math.floor(position)
-        )
-
-        upper = int(
-            math.ceil(position)
-        )
-
-        if lower == upper:
-            return sorted_values[
-                lower
-            ]
-
-        lower_value = (
-            sorted_values[lower]
-        )
-
-        upper_value = (
-            sorted_values[upper]
-        )
-
-        fraction = (
-            position - lower
-        )
-
-        return (
-            lower_value
-            + (
-                upper_value
-                - lower_value
-            )
-            * fraction
-        )

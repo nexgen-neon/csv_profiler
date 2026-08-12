@@ -1,14 +1,27 @@
-import pandas as pd
+from example.profiler.column_profiler import (
+    ColumnProfiler,
+)
 
-from .column_profiler import ColumnProfiler
-from .dataset_profiler import DatasetProfiler
+from example.profiler.dataset_profiler import (
+    DatasetProfiler,
+)
 
 
 class DataProfiler:
 
+    """
+    Main orchestration layer.
+
+    It coordinates:
+        DatasetProfiler
+        ColumnProfiler
+
+    The DataProfiler itself contains NO CSV-specific logic.
+    """
+
     def __init__(
         self,
-        top_n: int = 5,
+        top_n=5,
     ):
 
         self.top_n = top_n
@@ -21,102 +34,75 @@ class DataProfiler:
 
         self.initialized = False
 
-        self.batch_count = 0
-
-        self.total_input_bytes = 0
-
-    def process_batch(
+    def _initialize_columns(
         self,
-        batch: pd.DataFrame,
-        batch_size_bytes: int | None = None,
+        dataframe,
     ):
 
-        if not self.initialized:
+        if self.initialized:
+            return
 
-            self._initialize(
-                batch
-            )
+        for column in dataframe.columns:
 
-        self.batch_count += 1
-
-        if batch_size_bytes is not None:
-
-            self.total_input_bytes += (
-                batch_size_bytes
-            )
-
-        self.dataset_profiler.process_batch(
-            batch
-        )
-
-        for column in batch.columns:
-
-            self.column_profilers[
-                column
-            ].process_batch(
-                batch[column]
-            )
-
-    def _initialize(
-        self,
-        batch: pd.DataFrame,
-    ):
-
-        columns = list(
-            batch.columns
-        )
-
-        self.dataset_profiler.initialize_columns(
-            columns
-        )
-
-        for column in columns:
-
-            self.column_profilers[
-                column
-            ] = ColumnProfiler(
-                column_name=column,
-                pandas_dtype=str(
-                    batch[column].dtype
-                ),
-                top_n=self.top_n,
+            self.column_profilers[column] = (
+                ColumnProfiler(
+                    column_name=column,
+                    first_series=dataframe[
+                        column
+                    ],
+                    top_n=self.top_n,
+                )
             )
 
         self.initialized = True
 
-    def finalize(self):
+    def process_batch(
+        self,
+        dataframe,
+    ):
 
-        dataset_profile = (
-            self.dataset_profiler.finalize()
+        if dataframe is None:
+            return
+
+        if dataframe.empty:
+            return
+
+        # Dataset-level profiling
+        self.dataset_profiler.process_batch(
+            dataframe
         )
 
-        column_profiles = {}
+        # Initialize column profilers
+        self._initialize_columns(
+            dataframe
+        )
 
-        for (
-            column,
-            profiler,
-        ) in self.column_profilers.items():
+        # Column-level profiling
+        for column in dataframe.columns:
 
-            column_profiles[
+            self.column_profilers[
                 column
-            ] = profiler.finalize()
+            ].process(
+                dataframe[column]
+            )
+
+    def generate(self):
+
+        columns = {}
+
+        for column_name, profiler in (
+            self.column_profilers.items()
+        ):
+
+            columns[column_name] = (
+                profiler.finalize()
+            )
 
         return {
-            "dataset_profile": (
-                dataset_profile
-            ),
-            "column_profiles": (
-                column_profiles
-            ),
-            "batch_count": (
-                self.batch_count
-            ),
-            "total_input_bytes": (
-                self.total_input_bytes
-            ),
-            "total_input_mb": round(
-                self.total_input_bytes
-                / (1024 * 1024),
-                2,
-            ),
+
+            "dataset":
+                self.dataset_profiler.finalize(),
+
+            "columns":
+                columns,
         }
