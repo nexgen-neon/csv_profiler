@@ -1,173 +1,262 @@
+import random
+
 import numpy as np
 import pandas as pd
 
-from utils.statistics import (
-    clean_value,
-    percentage
-)
 
+class NumericalProfiler:
 
-class NumericProfiler:
+    RESERVOIR_SIZE = 100_000
 
-    PERCENTILES = [
-        1,
-        5,
-        10,
-        25,
-        50,
-        75,
-        90,
-        95,
-        99
-    ]
+    def __init__(self):
 
-    def profile(
-        self,
-        series: pd.Series
-    ) -> dict:
+        self.count = 0
 
-        numeric = pd.to_numeric(
+        self.null_count = 0
+
+        self.minimum = None
+        self.maximum = None
+
+        self.sum = 0.0
+        self.sum_squared = 0.0
+
+        self.reservoir = []
+
+    def process(self, series):
+
+        self.null_count += int(
+            series.isna().sum()
+        )
+
+        values = pd.to_numeric(
             series,
-            errors="coerce"
+            errors="coerce",
         ).dropna()
 
-        if numeric.empty:
+        if values.empty:
+            return
+
+        array = values.to_numpy(
+            dtype=float
+        )
+
+        batch_count = len(array)
+
+        self.count += batch_count
+
+        batch_min = float(
+            np.min(array)
+        )
+
+        batch_max = float(
+            np.max(array)
+        )
+
+        if self.minimum is None:
+
+            self.minimum = batch_min
+
+        else:
+
+            self.minimum = min(
+                self.minimum,
+                batch_min,
+            )
+
+        if self.maximum is None:
+
+            self.maximum = batch_max
+
+        else:
+
+            self.maximum = max(
+                self.maximum,
+                batch_max,
+            )
+
+        self.sum += float(
+            np.sum(array)
+        )
+
+        self.sum_squared += float(
+            np.sum(
+                array * array
+            )
+        )
+
+        self._update_reservoir(
+            array
+        )
+
+    def _update_reservoir(self, array):
+
+        for value in array:
+
+            if len(self.reservoir) < self.RESERVOIR_SIZE:
+
+                self.reservoir.append(
+                    float(value)
+                )
+
+                continue
+
+            position = random.randint(
+                0,
+                self.count - 1,
+            )
+
+            if position < self.RESERVOIR_SIZE:
+
+                self.reservoir[position] = (
+                    float(value)
+                )
+
+    def finalize(self):
+
+        if self.count == 0:
 
             return {
-
-                "min": None,
-
-                "max": None,
-
+                "minimum": None,
+                "maximum": None,
                 "mean": None,
-
                 "median": None,
-
-                "std": None,
-
+                "standard_deviation": None,
                 "variance": None,
-
-                "percentiles": {
-                    str(p): None
-                    for p in self.PERCENTILES
-                },
-
-                "q1": None,
-
-                "q2": None,
-
-                "q3": None,
-
+                "quantiles": {},
                 "iqr": None,
-
                 "outliers": {
                     "count": 0,
-                    "percentage": 0.0,
-                    "method": "IQR"
-                }
+                    "method": "IQR",
+                },
             }
 
-        q1 = numeric.quantile(0.25)
+        mean = (
+            self.sum
+            / self.count
+        )
 
-        q2 = numeric.quantile(0.50)
+        variance = max(
+            (
+                self.sum_squared
+                / self.count
+            )
+            - (mean * mean),
+            0.0,
+        )
 
-        q3 = numeric.quantile(0.75)
+        std = variance ** 0.5
+
+        sample = np.asarray(
+            self.reservoir,
+            dtype=float,
+        )
+
+        percentiles = np.percentile(
+            sample,
+            [
+                1,
+                5,
+                10,
+                25,
+                50,
+                75,
+                90,
+                95,
+                99,
+            ],
+        )
+
+        q1 = float(percentiles[3])
+        q2 = float(percentiles[4])
+        q3 = float(percentiles[5])
 
         iqr = q3 - q1
 
-        lower_bound = q1 - (
-            1.5 * iqr
+        lower_bound = (
+            q1 - 1.5 * iqr
         )
 
-        upper_bound = q3 + (
-            1.5 * iqr
+        upper_bound = (
+            q3 + 1.5 * iqr
         )
 
-        outliers = numeric[
-            (numeric < lower_bound)
-            |
-            (numeric > upper_bound)
-        ]
+        outlier_count = int(
+            np.sum(
+                (sample < lower_bound)
+                |
+                (sample > upper_bound)
+            )
+        )
 
         return {
 
-            "min":
-                clean_value(
-                    numeric.min()
-                ),
+            "minimum":
+                self.minimum,
 
-            "max":
-                clean_value(
-                    numeric.max()
-                ),
+            "maximum":
+                self.maximum,
 
             "mean":
-                clean_value(
-                    numeric.mean()
-                ),
+                mean,
 
             "median":
-                clean_value(
-                    numeric.median()
-                ),
+                q2,
 
-            "std":
-                clean_value(
-                    numeric.std()
-                ),
+            "standard_deviation":
+                std,
 
             "variance":
-                clean_value(
-                    numeric.var()
-                ),
+                variance,
 
-            "percentiles": {
+            "quantiles": {
 
-                str(p):
-                    clean_value(
-                        np.percentile(
-                            numeric,
-                            p
-                        )
-                    )
+                "1%":
+                    float(percentiles[0]),
 
-                for p in self.PERCENTILES
+                "5%":
+                    float(percentiles[1]),
+
+                "10%":
+                    float(percentiles[2]),
+
+                "25%":
+                    q1,
+
+                "50%":
+                    q2,
+
+                "75%":
+                    q3,
+
+                "90%":
+                    float(percentiles[6]),
+
+                "95%":
+                    float(percentiles[7]),
+
+                "99%":
+                    float(percentiles[8]),
             },
 
-            "q1":
-                clean_value(q1),
+            "q1": q1,
 
-            "q2":
-                clean_value(q2),
+            "q2": q2,
 
-            "q3":
-                clean_value(q3),
+            "q3": q3,
 
-            "iqr":
-                clean_value(iqr),
+            "iqr": iqr,
 
             "outliers": {
 
                 "count":
-                    int(len(outliers)),
-
-                "percentage":
-                    percentage(
-                        len(outliers),
-                        len(numeric)
-                    ),
+                    outlier_count,
 
                 "method":
                     "IQR",
+            },
 
-                "lower_bound":
-                    clean_value(
-                        lower_bound
-                    ),
-
-                "upper_bound":
-                    clean_value(
-                        upper_bound
-                    )
-            }
+            "quantiles_note":
+                "Quantiles and IQR outliers "
+                "are estimated from a bounded "
+                "reservoir sample.",
         }
