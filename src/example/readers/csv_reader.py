@@ -1,42 +1,84 @@
+from collections.abc import Iterator
 from pathlib import Path
-from typing import IO, Union
 
 import pandas as pd
 
-from .base_reader import BaseReader
+from example.readers.base_reader import BaseReader
 
 
 class CSVReader(BaseReader):
+    """
+    CSV reader capable of processing datasets incrementally.
+
+    The reader does NOT load a huge CSV completely into RAM.
+    """
+
+    DEFAULT_CHUNKSIZE = 100_000
 
     def __init__(
         self,
-        source: Union[str, Path, IO[bytes], IO[str]]
+        source,
+        chunksize: int | None = None,
+        encoding: str | None = None,
     ):
         self.source = source
 
+        self.chunksize = (
+            chunksize
+            if chunksize is not None
+            else self.DEFAULT_CHUNKSIZE
+        )
+
+        self.encoding = encoding
+
     def read(self) -> pd.DataFrame:
+        """
+        Read the complete CSV.
 
-        try:
-            return pd.read_csv(self.source)
+        Use this only for small datasets.
+        """
 
-        except UnicodeDecodeError:
+        if hasattr(self.source, "seek"):
+            self.source.seek(0)
 
-            if hasattr(self.source, "seek"):
-                self.source.seek(0)
+        kwargs = {
+            "low_memory": True,
+        }
 
-            return pd.read_csv(
-                self.source,
-                encoding="latin1"
-            )
+        if self.encoding:
+            kwargs["encoding"] = self.encoding
 
-        except pd.errors.EmptyDataError as exc:
+        return pd.read_csv(
+            self.source,
+            **kwargs,
+        )
 
-            raise ValueError(
-                "The CSV file is empty."
-            ) from exc
+    def read_batches(
+        self,
+        chunksize: int | None = None,
+    ) -> Iterator[pd.DataFrame]:
 
-        except pd.errors.ParserError as exc:
+        if hasattr(self.source, "seek"):
+            self.source.seek(0)
 
-            raise ValueError(
-                f"Invalid CSV input: {exc}"
-            ) from exc
+        rows_per_chunk = (
+            chunksize
+            if chunksize is not None
+            else self.chunksize
+        )
+
+        kwargs = {
+            "chunksize": rows_per_chunk,
+            "low_memory": True,
+        }
+
+        if self.encoding:
+            kwargs["encoding"] = self.encoding
+
+        reader = pd.read_csv(
+            self.source,
+            **kwargs,
+        )
+
+        for dataframe in reader:
+            yield dataframe

@@ -1,95 +1,137 @@
-import pandas as pd
-
-from utils.statistics import percentage
+from collections import Counter
 
 
 class CategoricalProfiler:
 
-    def profile(self, series: pd.Series) -> dict:
-        """
-        Profile a categorical column.
+    MAX_UNIQUE_TRACKED = 100_000
 
-        Calculates:
-        - Unique values
-        - Unique percentage
-        - Most frequent values
-        - Frequency of each top value
-        - Frequency percentage
-        """
+    def __init__(self, top_n=5):
 
-        # Remove null values because frequency
-        # analysis is performed on actual values.
-        non_null = series.dropna()
+        self.top_n = top_n
 
-        # Total number of non-null values
-        total_values = len(non_null)
+        self.total_count = 0
+        self.null_count = 0
 
-        # -------------------------------------------------
-        # UNIQUE VALUES
-        # -------------------------------------------------
+        self.unique_values = set()
 
-        unique_values = int(
-            non_null.nunique()
+        self.frequency = Counter()
+
+        self.high_cardinality = False
+
+    def process(self, series):
+
+        self.total_count += len(series)
+
+        self.null_count += int(
+            series.isna().sum()
         )
 
-        # -------------------------------------------------
-        # UNIQUE PERCENTAGE
-        # -------------------------------------------------
-
-        unique_percentage = percentage(
-            unique_values,
-            len(series)
+        values = (
+            series
+            .dropna()
+            .astype(str)
         )
 
-        # -------------------------------------------------
-        # FREQUENCY OF EACH VALUE
-        # -------------------------------------------------
+        if values.empty:
+            return
 
-        value_counts = (
-            non_null.value_counts()
+        # Track frequency.
+        counts = values.value_counts()
+
+        for value, count in counts.items():
+
+            self.frequency[value] += int(
+                count
+            )
+
+        # Track unique values with a hard memory bound.
+        new_values = values.unique()
+
+        remaining = (
+            self.MAX_UNIQUE_TRACKED
+            - len(self.unique_values)
         )
 
-        # -------------------------------------------------
-        # TOP 5 MOST FREQUENT VALUES
-        # -------------------------------------------------
+        if remaining <= 0:
 
-        most_frequent_values = []
+            self.high_cardinality = True
 
-        for value, frequency in (
-            value_counts.head(5).items()
+            return
+
+        if len(new_values) > remaining:
+
+            new_values = (
+                new_values[:remaining]
+            )
+
+            self.high_cardinality = True
+
+        self.unique_values.update(
+            new_values.tolist()
+        )
+
+    def finalize(self):
+
+        unique_count = len(
+            self.unique_values
+        )
+
+        unique_percentage = (
+            unique_count
+            / self.total_count
+            * 100
+            if self.total_count
+            else 0.0
+        )
+
+        non_null_count = (
+            self.total_count
+            - self.null_count
+        )
+
+        top_values = []
+
+        for value, count in (
+            self.frequency.most_common(
+                self.top_n
+            )
         ):
 
-            frequency = int(frequency)
-
-            frequency_percentage = percentage(
-                frequency,
-                total_values
+            percentage = (
+                count
+                / non_null_count
+                * 100
+                if non_null_count
+                else 0.0
             )
 
-            most_frequent_values.append(
+            top_values.append(
                 {
-                    "value": str(value),
-
-                    "frequency":
-                        frequency,
-
+                    "value": value,
+                    "frequency": count,
                     "frequency_percentage":
-                        frequency_percentage
+                        percentage,
                 }
             )
-
-        # -------------------------------------------------
-        # RETURN RESULT
-        # -------------------------------------------------
 
         return {
 
             "unique_values":
-                unique_values,
+                unique_count,
 
             "unique_percentage":
                 unique_percentage,
 
             "most_frequent_values":
-                most_frequent_values
+                top_values,
+
+            "high_cardinality":
+                self.high_cardinality,
+
+            "unique_count_note":
+                (
+                    "Exact while below the "
+                    "tracking limit; bounded "
+                    "when high-cardinality."
+                ),
         }

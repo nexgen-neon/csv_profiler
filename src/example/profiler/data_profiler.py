@@ -1,94 +1,108 @@
-import pandas as pd
+from example.profiler.column_profiler import (
+    ColumnProfiler,
+)
 
-from .dataset_profiler import DatasetProfiler
-from .column_profiler import ColumnProfiler
+from example.profiler.dataset_profiler import (
+    DatasetProfiler,
+)
 
 
 class DataProfiler:
 
+    """
+    Main orchestration layer.
+
+    It coordinates:
+        DatasetProfiler
+        ColumnProfiler
+
+    The DataProfiler itself contains NO CSV-specific logic.
+    """
+
     def __init__(
         self,
-        data: pd.DataFrame,
-        dataset_name: str = "dataset"
+        top_n=5,
     ):
-        """
-        Initialize the profiler.
 
-        DataProfiler receives a pandas DataFrame.
-        It does NOT care whether the DataFrame came
-        from CSV, JSON, database, Parquet, etc.
-        """
-
-        if not isinstance(
-            data,
-            pd.DataFrame
-        ):
-
-            raise TypeError(
-                "DataProfiler expects "
-                "a pandas DataFrame."
-            )
-
-        self.data = data
-
-        self.dataset_name = (
-            dataset_name
-        )
+        self.top_n = top_n
 
         self.dataset_profiler = (
             DatasetProfiler()
         )
 
-        self.column_profiler = (
-            ColumnProfiler()
-        )
+        self.column_profilers = {}
 
-    # =====================================================
-    # GENERATE COMPLETE PROFILE
-    # =====================================================
+        self.initialized = False
 
-    def generate(self) -> dict:
-        """
-        Generate the complete profile.
-        """
+    def _initialize_columns(
+        self,
+        dataframe,
+    ):
 
-        # -------------------------------------------------
-        # DATASET LEVEL
-        # -------------------------------------------------
+        if self.initialized:
+            return
 
-        dataset_statistics = (
-            self.dataset_profiler
-            .profile(self.data)
-        )
+        for column in dataframe.columns:
 
-        # -------------------------------------------------
-        # COLUMN LEVEL
-        # -------------------------------------------------
-
-        column_statistics = {}
-
-        for column in self.data.columns:
-
-            column_statistics[
-                str(column)
-            ] = self.column_profiler.profile(
-                self.data[column]
+            self.column_profilers[column] = (
+                ColumnProfiler(
+                    column_name=column,
+                    first_series=dataframe[
+                        column
+                    ],
+                    top_n=self.top_n,
+                )
             )
 
-        # -------------------------------------------------
-        # FINAL PROFILE
-        # -------------------------------------------------
+        self.initialized = True
+
+    def process_batch(
+        self,
+        dataframe,
+    ):
+
+        if dataframe is None:
+            return
+
+        if dataframe.empty:
+            return
+
+        # Dataset-level profiling
+        self.dataset_profiler.process_batch(
+            dataframe
+        )
+
+        # Initialize column profilers
+        self._initialize_columns(
+            dataframe
+        )
+
+        # Column-level profiling
+        for column in dataframe.columns:
+
+            self.column_profilers[
+                column
+            ].process(
+                dataframe[column]
+            )
+
+    def generate(self):
+
+        columns = {}
+
+        for column_name, profiler in (
+            self.column_profilers.items()
+        ):
+
+            columns[column_name] = (
+                profiler.finalize()
+            )
 
         return {
 
-            "dataset": {
-
-                "name":
-                    self.dataset_name,
-
-                **dataset_statistics
-            },
+            "dataset":
+                self.dataset_profiler.finalize(),
 
             "columns":
-                column_statistics
+                columns,
         }
