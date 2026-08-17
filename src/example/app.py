@@ -1,781 +1,806 @@
 import json
+import os
+import time
+from urllib.parse import quote_plus
 
 import pandas as pd
 import streamlit as st
 
-from example.readers import CSVReader
 from example.profiler import DataProfiler
+from example.readers import CSVReader, PostgreSQLReader
 
-
-# =========================================================
-# PAGE CONFIGURATION
-# =========================================================
 
 st.set_page_config(
     page_title="Data Profiler",
     page_icon="📊",
-    layout="wide"
+    layout="wide",
 )
 
-
-# =========================================================
-# TITLE
-# =========================================================
 
 st.title("📊 Data Profiler")
 
 st.write(
-    """
-    Upload a CSV file to generate dataset-level
-    and column-level profiling.
-    """
+    "Profile small and large datasets from CSV files "
+    "or PostgreSQL databases."
 )
 
 
-# =========================================================
-# FILE UPLOAD
-# =========================================================
+# ---------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------
 
-uploaded_file = st.file_uploader(
-    "Upload your CSV file",
-    type=["csv"]
-)
+with st.sidebar:
 
+    st.header("⚙️ Settings")
 
-# =========================================================
-# PROFILE BUTTON
-# =========================================================
-
-if uploaded_file is not None:
-
-    st.info(
-        f"Selected file: {uploaded_file.name}"
+    chunk_size = st.number_input(
+        "Rows per processing batch",
+        min_value=10_000,
+        max_value=1_000_000,
+        value=100_000,
+        step=10_000,
+        help=(
+            "Controls how many rows are processed "
+            "at a time."
+        ),
     )
 
-    if st.button(
-        "🚀 Start Profiling",
-        type="primary"
-    ):
+    top_n = st.number_input(
+        "Top categorical values",
+        min_value=1,
+        max_value=20,
+        value=5,
+        step=1,
+    )
 
-        try:
 
-            # -------------------------------------------------
-            # INGESTION
-            #
-            # This is the only CSV-specific part.
-            # -------------------------------------------------
+# ---------------------------------------------------------
+# Input
+# ---------------------------------------------------------
 
-            reader = CSVReader(
-                uploaded_file
-            )
+st.subheader("📁 Dataset")
 
-            # -------------------------------------------------
-            # READER -> DATAFRAME
-            # -------------------------------------------------
-
-            data = reader.read()
-
-            # -------------------------------------------------
-            # DATAFRAME -> PROFILER
-            # -------------------------------------------------
-
-            profiler = DataProfiler(
-                data=data,
-                dataset_name=uploaded_file.name
-            )
-
-            # -------------------------------------------------
-            # GENERATE PROFILE
-            # -------------------------------------------------
-
-            profile = profiler.generate()
-
-            # -------------------------------------------------
-            # STORE IN SESSION
-            # -------------------------------------------------
-
-            st.session_state[
-                "data"
-            ] = data
-
-            st.session_state[
-                "profile"
-            ] = profile
-
-            st.session_state[
-                "profile_generated"
-            ] = True
-
-            st.success(
-                "Profiling completed successfully!"
-            )
-
-        except Exception as error:
-
-            st.error(
-                f"Error while profiling: {error}"
-            )
+data_source = st.radio(
+    "Choose data source",
+    [
+        "CSV",
+        "PostgreSQL",
+    ],
+    horizontal=True,
+)
 
 
 # =========================================================
-# DISPLAY PROFILE
+# CSV INPUT
 # =========================================================
 
-if st.session_state.get(
-    "profile_generated",
-    False
+uploaded_file = None
+local_path = None
+
+
+if data_source == "CSV":
+
+    input_mode = st.radio(
+        "Choose CSV input method",
+        [
+            "Upload CSV",
+            "Use local CSV path",
+        ],
+        horizontal=True,
+    )
+
+    if input_mode == "Upload CSV":
+
+        uploaded_file = st.file_uploader(
+            "Upload your CSV file",
+            type=["csv"],
+        )
+
+    else:
+
+        local_path = st.text_input(
+            "Enter the full CSV path",
+            placeholder=(
+                r"C:\data\large_dataset.csv"
+            ),
+        )
+
+
+# =========================================================
+# POSTGRESQL INPUT
+# =========================================================
+
+else:
+
+    st.subheader("🐘 PostgreSQL Connection")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        postgres_host = st.text_input(
+            "Host",
+            value="localhost",
+        )
+
+        postgres_database = st.text_input(
+            "Database",
+            value="profiler_test",
+        )
+
+        postgres_username = st.text_input(
+            "Username",
+            value="postgres",
+        )
+
+    with col2:
+
+        postgres_port = st.number_input(
+            "Port",
+            min_value=1,
+            max_value=65535,
+            value=5432,
+            step=1,
+        )
+
+        postgres_schema = st.text_input(
+            "Schema",
+            value="public",
+        )
+
+        postgres_password = st.text_input(
+            "Password",
+            type="password",
+        )
+
+    postgres_table = st.text_input(
+        "Table name",
+        value="customers",
+    )
+
+
+# ---------------------------------------------------------
+# Helper
+# ---------------------------------------------------------
+
+def profile_source(reader):
+
+    profiler = DataProfiler(
+        top_n=int(top_n)
+    )
+
+    progress_bar = st.progress(0)
+
+    status = st.empty()
+
+    start_time = time.perf_counter()
+
+    batch_count = 0
+
+    total_rows = 0
+
+    try:
+
+        for batch in reader.read_batches(
+            chunksize=int(chunk_size)
+        ):
+
+            profiler.process_batch(
+                batch
+            )
+
+            batch_count += 1
+
+            total_rows += len(batch)
+
+            status.write(
+                f"Processed batch "
+                f"{batch_count:,} — "
+                f"{len(batch):,} rows "
+                f"(total: {total_rows:,})"
+            )
+
+            progress_bar.progress(
+                min(
+                    0.99,
+                    batch_count / (
+                        batch_count + 10
+                    ),
+                )
+            )
+
+        result = profiler.generate()
+
+        elapsed = (
+            time.perf_counter()
+            - start_time
+        )
+
+        progress_bar.progress(1.0)
+
+        status.success(
+            f"Profiling completed in "
+            f"{elapsed:.2f} seconds."
+        )
+
+        return result
+
+    except Exception as exc:
+
+        progress_bar.empty()
+
+        status.error(
+            f"Profiling failed: {exc}"
+        )
+
+        return None
+
+
+# ---------------------------------------------------------
+# Start Profiling
+# ---------------------------------------------------------
+
+if st.button(
+    "🚀 Start Profiling",
+    type="primary",
+    use_container_width=True,
 ):
 
-    data = st.session_state[
-        "data"
+    reader = None
+
+    file_name = None
+
+
+    # =====================================================
+    # CSV
+    # =====================================================
+
+    if data_source == "CSV":
+
+        if input_mode == "Upload CSV":
+
+            if uploaded_file is None:
+
+                st.warning(
+                    "Please upload a CSV file first."
+                )
+
+                st.stop()
+
+            reader = CSVReader(
+                uploaded_file,
+                chunksize=int(chunk_size),
+            )
+
+            file_name = uploaded_file.name
+
+        else:
+
+            if not local_path:
+
+                st.warning(
+                    "Please enter a CSV path."
+                )
+
+                st.stop()
+
+            if not os.path.isfile(
+                local_path
+            ):
+
+                st.error(
+                    "The specified file does not exist."
+                )
+
+                st.stop()
+
+            reader = CSVReader(
+                local_path,
+                chunksize=int(chunk_size),
+            )
+
+            file_name = os.path.basename(
+                local_path
+            )
+
+
+    # =====================================================
+    # POSTGRESQL
+    # =====================================================
+
+    else:
+
+        if not postgres_password:
+
+            st.warning(
+                "Please enter your PostgreSQL password."
+            )
+
+            st.stop()
+
+        if not postgres_table:
+
+            st.warning(
+                "Please enter a PostgreSQL table name."
+            )
+
+            st.stop()
+
+
+        # URL-encode username and password so
+        # special characters do not break the URL.
+
+        encoded_username = quote_plus(
+            postgres_username
+        )
+
+        encoded_password = quote_plus(
+            postgres_password
+        )
+
+
+        connection_url = (
+            "postgresql+psycopg://"
+            f"{encoded_username}:"
+            f"{encoded_password}@"
+            f"{postgres_host}:"
+            f"{int(postgres_port)}/"
+            f"{postgres_database}"
+        )
+
+
+        reader = PostgreSQLReader(
+            connection_url=connection_url,
+            table_name=postgres_table,
+            schema=postgres_schema,
+            chunksize=int(chunk_size),
+        )
+
+
+        file_name = (
+            f"{postgres_database}."
+            f"{postgres_schema}."
+            f"{postgres_table}"
+        )
+
+
+    # =====================================================
+    # Run profiler
+    # =====================================================
+
+    result = profile_source(
+        reader
+    )
+
+
+    if result is not None:
+
+        result[
+            "dataset"
+        ]["name"] = file_name
+
+        st.session_state[
+            "profile_result"
+        ] = result
+
+
+# ---------------------------------------------------------
+# Display Results
+# ---------------------------------------------------------
+
+if "profile_result" in st.session_state:
+
+    result = st.session_state[
+        "profile_result"
     ]
 
-    profile = st.session_state[
-        "profile"
-    ]
-
-    dataset = profile[
+    dataset = result[
         "dataset"
     ]
 
-    columns = profile[
+    columns = result[
         "columns"
     ]
 
+    st.divider()
 
-    # =====================================================
-    # TABS
-    # =====================================================
+    st.header("📈 Profile Results")
 
-    (
-        overview_tab,
-        columns_tab,
-        numerical_tab,
-        categorical_tab,
-        json_tab
-    ) = st.tabs(
+
+    tab_overview, tab_columns, tab_numeric, tab_categorical, tab_json = st.tabs(
         [
-            "📋 Overview",
-            "🧱 Columns",
-            "🔢 Numerical",
-            "🏷️ Categorical",
-            "📄 JSON"
+            "Overview",
+            "Columns",
+            "Numerical",
+            "Categorical",
+            "JSON",
         ]
     )
 
 
     # =====================================================
-    # OVERVIEW TAB
+    # Overview
     # =====================================================
 
-    with overview_tab:
+    with tab_overview:
 
-        st.header(
-            "Dataset-Level Profiling"
-        )
+        c1, c2, c3, c4 = st.columns(4)
 
-        # -------------------------------------------------
-        # FIRST ROW OF METRICS
-        # -------------------------------------------------
-
-        col1, col2, col3, col4 = (
-            st.columns(4)
-        )
-
-        col1.metric(
+        c1.metric(
             "Rows",
-            dataset["rows"]
+            f"{dataset['rows']:,}",
         )
 
-        col2.metric(
+        c2.metric(
             "Columns",
-            dataset["columns"]
+            f"{dataset['columns']:,}",
         )
 
-        col3.metric(
-            "Duplicate Rows",
-            dataset["duplicate_rows"]
+        c3.metric(
+            "Memory",
+            f"{dataset['memory_usage_mb']:.2f} MB",
         )
 
-        col4.metric(
+        c4.metric(
             "Missing %",
-            f'{dataset["overall_missing_percentage"]}%'
+            f"{dataset['overall_missing_percentage']:.2f}%",
         )
 
-
-        # -------------------------------------------------
-        # SECOND ROW
-        # -------------------------------------------------
-
-        col5, col6, col7 = (
-            st.columns(3)
-        )
-
-        col5.metric(
-            "Memory Usage",
-            f'{dataset["memory_usage_bytes"]:,} bytes'
-        )
-
-        col6.metric(
-            "Completely Empty Rows",
-            dataset[
-                "completely_empty_rows"
-            ]
-        )
-
-        col7.metric(
-            "Completely Empty Columns",
-            dataset[
-                "completely_empty_columns"
-            ]
-        )
-
-
-        # -------------------------------------------------
-        # DATA PREVIEW
-        # -------------------------------------------------
 
         st.subheader(
-            "Dataset Preview"
-        )
-
-        st.dataframe(
-            data.head(10),
-            use_container_width=True
+            "Dataset Statistics"
         )
 
 
-        # -------------------------------------------------
-        # MISSING VALUES
-        # -------------------------------------------------
-
-        st.subheader(
-            "Missing Values by Column"
-        )
-
-        missing_data = pd.DataFrame(
+        overview_df = pd.DataFrame(
             {
-                "Column": list(
-                    columns.keys()
-                ),
+                "Metric": [
+                    "Rows",
+                    "Columns",
+                    "Memory (MB)",
+                    "Missing values",
+                    "Missing percentage",
+                    "Completely empty rows",
+                    "Completely empty columns",
+                ],
 
-                "Missing %": [
-                    columns[column][
-                        "null_percentage"
-                    ]
-                    for column in columns
-                ]
+                "Value": [
+                    dataset["rows"],
+
+                    dataset["columns"],
+
+                    round(
+                        dataset[
+                            "memory_usage_mb"
+                        ],
+                        2,
+                    ),
+
+                    dataset[
+                        "missing_values"
+                    ],
+
+                    round(
+                        dataset[
+                            "overall_missing_percentage"
+                        ],
+                        2,
+                    ),
+
+                    dataset[
+                        "completely_empty_rows"
+                    ],
+
+                    len(
+                        dataset[
+                            "completely_empty_columns"
+                        ]
+                    ),
+                ],
             }
         )
 
-        missing_data = (
-            missing_data
-            .sort_values(
-                "Missing %",
-                ascending=False
+
+        st.dataframe(
+            overview_df,
+            use_container_width=True,
+        )
+
+
+        if dataset[
+            "completely_empty_columns"
+        ]:
+
+            st.warning(
+                "Completely empty columns: "
+                + ", ".join(
+                    dataset[
+                        "completely_empty_columns"
+                    ]
+                )
             )
-        )
-
-        st.bar_chart(
-            missing_data.set_index(
-                "Column"
-            )
-        )
-
-
-        # -------------------------------------------------
-        # SEMANTIC TYPES
-        # -------------------------------------------------
-
-        st.subheader(
-            "Semantic Data Types"
-        )
-
-        semantic_types = pd.Series(
-            [
-                columns[column][
-                    "semantic_type"
-                ]
-                for column in columns
-            ]
-        )
-
-        semantic_counts = (
-            semantic_types
-            .value_counts()
-        )
-
-        st.bar_chart(
-            semantic_counts
-        )
 
 
     # =====================================================
-    # COLUMNS TAB
+    # Columns
     # =====================================================
 
-    with columns_tab:
-
-        st.header(
-            "Column-Level Profiling"
-        )
-
-        # -------------------------------------------------
-        # COLUMN SEARCH
-        # -------------------------------------------------
+    with tab_columns:
 
         search = st.text_input(
-            "🔍 Search column"
+            "🔎 Search columns"
         )
 
-        column_rows = []
+        rows = []
 
-        for column_name, info in (
-            columns.items()
-        ):
+        for name, info in columns.items():
 
-            if (
-                search
-                and
-                search.lower()
-                not in column_name.lower()
+            if search.lower() not in (
+                name.lower()
             ):
-
                 continue
 
-            column_rows.append(
+            rows.append(
                 {
-
                     "Column":
-                        column_name,
+                        name,
 
                     "Pandas dtype":
-                        info["dtype"],
+                        info[
+                            "pandas_dtype"
+                        ],
 
                     "Semantic type":
-                        info["semantic_type"],
+                        info[
+                            "semantic_type"
+                        ],
 
                     "Null count":
-                        info["null_count"],
+                        info[
+                            "null_count"
+                        ],
 
                     "Null %":
-                        info["null_percentage"],
-
-                    "Unique count":
-                        info["unique_count"],
-
-                    "Unique %":
-                        info["unique_percentage"],
-
-                    "Duplicate count":
-                        info["duplicate_count"],
-
-                    "Constant":
-                        info["constant"],
-
-                    "Near constant":
-                        info["near_constant"]
+                        round(
+                            info[
+                                "null_percentage"
+                            ],
+                            2,
+                        ),
                 }
             )
 
-        if column_rows:
 
-            st.dataframe(
-                pd.DataFrame(
-                    column_rows
-                ),
-                use_container_width=True
-            )
-
-        else:
-
-            st.info(
-                "No matching columns found."
-            )
-
-
-        # -------------------------------------------------
-        # INDIVIDUAL COLUMN
-        # -------------------------------------------------
-
-        st.subheader(
-            "Column Details"
-        )
-
-        selected_column = st.selectbox(
-            "Select a column",
-            list(columns.keys())
-        )
-
-        selected_info = columns[
-            selected_column
-        ]
-
-        st.json(
-            selected_info
+        st.dataframe(
+            pd.DataFrame(rows),
+            use_container_width=True,
         )
 
 
     # =====================================================
-    # NUMERICAL TAB
+    # Numerical
     # =====================================================
 
-    with numerical_tab:
+    with tab_numeric:
 
-        st.header(
-            "Numerical Profiling"
-        )
+        numerical_rows = []
 
-        numerical_columns = [
+        for name, info in columns.items():
 
-            column
+            if info[
+                "semantic_type"
+            ] != "numeric":
 
-            for column, info
-            in columns.items()
+                continue
 
-            if info["semantic_type"]
-            == "numeric"
-        ]
-
-        if not numerical_columns:
-
-            st.info(
-                "No numerical columns detected."
-            )
-
-        else:
-
-            selected_column = st.selectbox(
-                "Select numerical column",
-                numerical_columns
-            )
-
-            info = columns[
-                selected_column
+            stats = info[
+                "statistics"
             ]
 
-            statistics = info.get(
-                "numeric_statistics",
-                {}
+            numerical_rows.append(
+                {
+                    "Column":
+                        name,
+
+                    "Min":
+                        stats[
+                            "minimum"
+                        ],
+
+                    "Max":
+                        stats[
+                            "maximum"
+                        ],
+
+                    "Mean":
+                        stats[
+                            "mean"
+                        ],
+
+                    "Median":
+                        stats[
+                            "median"
+                        ],
+
+                    "Std":
+                        stats[
+                            "standard_deviation"
+                        ],
+
+                    "Variance":
+                        stats[
+                            "variance"
+                        ],
+
+                    "IQR":
+                        stats[
+                            "iqr"
+                        ],
+
+                    "Outliers":
+                        stats[
+                            "outliers"
+                        ][
+                            "count"
+                        ],
+                }
             )
 
 
-            # -------------------------------------------------
-            # BASIC STATISTICS
-            # -------------------------------------------------
+        if numerical_rows:
 
-            st.subheader(
-                "Basic Statistics"
+            numeric_df = pd.DataFrame(
+                numerical_rows
             )
 
-            col1, col2, col3 = (
-                st.columns(3)
+            st.dataframe(
+                numeric_df,
+                use_container_width=True,
             )
 
-            col1.metric(
-                "Minimum",
-                statistics.get(
-                    "min"
-                )
-            )
-
-            col2.metric(
-                "Maximum",
-                statistics.get(
-                    "max"
-                )
-            )
-
-            col3.metric(
-                "Mean",
-                statistics.get(
-                    "mean"
-                )
-            )
-
-
-            col4, col5, col6 = (
-                st.columns(3)
-            )
-
-            col4.metric(
-                "Median",
-                statistics.get(
-                    "median"
-                )
-            )
-
-            col5.metric(
-                "Standard Deviation",
-                statistics.get(
-                    "std"
-                )
-            )
-
-            col6.metric(
-                "Variance",
-                statistics.get(
-                    "variance"
-                )
-            )
-
-
-            # -------------------------------------------------
-            # QUARTILES
-            # -------------------------------------------------
-
-            st.subheader(
-                "Quartiles"
-            )
-
-            col1, col2, col3, col4 = (
-                st.columns(4)
-            )
-
-            col1.metric(
-                "Q1",
-                statistics.get(
-                    "q1"
-                )
-            )
-
-            col2.metric(
-                "Q2",
-                statistics.get(
-                    "q2"
-                )
-            )
-
-            col3.metric(
-                "Q3",
-                statistics.get(
-                    "q3"
-                )
-            )
-
-            col4.metric(
-                "IQR",
-                statistics.get(
-                    "iqr"
-                )
-            )
-
-
-            # -------------------------------------------------
-            # PERCENTILES
-            # -------------------------------------------------
-
-            st.subheader(
-                "Percentiles"
-            )
-
-            percentile_data = pd.DataFrame(
-                [
-                    {
-                        "Percentile":
-                            percentile,
-
-                        "Value":
-                            value
-                    }
-
-                    for percentile, value
-                    in statistics.get(
-                        "percentiles",
-                        {}
-                    ).items()
+            st.bar_chart(
+                numeric_df.set_index(
+                    "Column"
+                )[
+                    [
+                        "Mean",
+                        "Median",
+                    ]
                 ]
             )
 
-            st.dataframe(
-                percentile_data,
-                use_container_width=True
-            )
-
-
-            # -------------------------------------------------
-            # OUTLIERS
-            # -------------------------------------------------
-
-            st.subheader(
-                "IQR Outliers"
-            )
-
-            outliers = statistics.get(
-                "outliers",
-                {}
-            )
-
-            col1, col2, col3 = (
-                st.columns(3)
-            )
-
-            col1.metric(
-                "Outlier Count",
-                outliers.get(
-                    "count",
-                    0
-                )
-            )
-
-            col2.metric(
-                "Outlier %",
-                outliers.get(
-                    "percentage",
-                    0
-                )
-            )
-
-            col3.metric(
-                "Method",
-                outliers.get(
-                    "method",
-                    "IQR"
-                )
-            )
-
-
-    # =====================================================
-    # CATEGORICAL TAB
-    # =====================================================
-
-    with categorical_tab:
-
-        st.header(
-            "Categorical Profiling"
-        )
-
-        categorical_columns = [
-
-            column
-
-            for column, info
-            in columns.items()
-
-            if info["semantic_type"]
-            == "categorical"
-        ]
-
-        if not categorical_columns:
+        else:
 
             st.info(
-                "No categorical columns detected."
+                "No numerical columns found."
             )
+
+
+    # =====================================================
+    # Categorical
+    # =====================================================
+
+    with tab_categorical:
+
+        categorical_rows = []
+
+        for name, info in columns.items():
+
+            if info[
+                "semantic_type"
+            ] != "categorical":
+
+                continue
+
+            categorical = info[
+                "categorical"
+            ]
+
+            categorical_rows.append(
+                {
+                    "Column":
+                        name,
+
+                    "Unique values":
+                        categorical[
+                            "unique_values"
+                        ],
+
+                    "Unique %":
+                        categorical[
+                            "unique_percentage"
+                        ],
+                }
+            )
+
+
+        if categorical_rows:
+
+            categorical_df = pd.DataFrame(
+                categorical_rows
+            )
+
+            st.dataframe(
+                categorical_df,
+                use_container_width=True,
+            )
+
+            st.bar_chart(
+                categorical_df.set_index(
+                    "Column"
+                )[
+                    "Unique values"
+                ]
+            )
+
+
+            st.subheader(
+                "Top Values"
+            )
+
+
+            for name, info in columns.items():
+
+                if info[
+                    "semantic_type"
+                ] != "categorical":
+
+                    continue
+
+                st.write(
+                    f"### {name}"
+                )
+
+                top_values = info[
+                    "categorical"
+                ][
+                    "most_frequent_values"
+                ]
+
+
+                if top_values:
+
+                    st.dataframe(
+                        pd.DataFrame(
+                            top_values
+                        ),
+                        use_container_width=True,
+                    )
 
         else:
 
-            selected_column = st.selectbox(
-                "Select categorical column",
-                categorical_columns
+            st.info(
+                "No categorical columns found."
             )
-
-            info = columns[
-                selected_column
-            ]
-
-            categorical_statistics = info.get(
-                "categorical_statistics",
-                {}
-            )
-
-
-            # -------------------------------------------------
-            # UNIQUE VALUES
-            # -------------------------------------------------
-
-            st.subheader(
-                "Unique Values"
-            )
-
-            col1, col2 = (
-                st.columns(2)
-            )
-
-            col1.metric(
-                "Unique Values",
-                categorical_statistics.get(
-                    "unique_values",
-                    0
-                )
-            )
-
-            col2.metric(
-                "Unique Percentage",
-                f'{categorical_statistics.get(
-                    "unique_percentage",
-                    0
-                )}%'
-            )
-
-
-            # -------------------------------------------------
-            # MOST FREQUENT VALUES
-            # -------------------------------------------------
-
-            st.subheader(
-                "Most Frequent Values"
-            )
-
-            most_frequent_values = (
-                categorical_statistics.get(
-                    "most_frequent_values",
-                    []
-                )
-            )
-
-            if most_frequent_values:
-
-                frequency_data = pd.DataFrame(
-                    most_frequent_values
-                )
-
-                st.dataframe(
-                    frequency_data,
-                    use_container_width=True
-                )
-
-            else:
-
-                st.info(
-                    "No categorical values found."
-                )
 
 
     # =====================================================
-    # JSON TAB
+    # JSON
     # =====================================================
 
-    with json_tab:
+    with tab_json:
 
-        st.header(
-            "Generated JSON Profile"
-        )
-
-        json_profile = json.dumps(
-            profile,
+        json_string = json.dumps(
+            result,
             indent=2,
-            default=str
+            default=str,
         )
 
-        # -------------------------------------------------
-        # DOWNLOAD
-        # -------------------------------------------------
 
         st.download_button(
             label="⬇️ Download JSON Profile",
 
-            data=json_profile,
+            data=json_string,
 
-            file_name="profile.json",
+            file_name=(
+                f"{dataset['name']}"
+                ".profile.json"
+            ),
 
-            mime="application/json"
+            mime="application/json",
+
+            use_container_width=True,
         )
 
-        # -------------------------------------------------
-        # DISPLAY
-        # -------------------------------------------------
 
-        st.code(
-            json_profile,
-            language="json"
-        )
+        st.json(result)
