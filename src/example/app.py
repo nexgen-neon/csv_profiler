@@ -10,6 +10,10 @@ from example.profiler import DataProfiler
 from example.readers import CSVReader, PostgreSQLReader
 
 
+# =========================================================
+# PAGE CONFIGURATION
+# =========================================================
+
 st.set_page_config(
     page_title="Data Profiler",
     page_icon="📊",
@@ -17,33 +21,72 @@ st.set_page_config(
 )
 
 
+# =========================================================
+# CONSTANTS
+# =========================================================
+
+# Fixed batch size.
+# The user does NOT configure this.
+BATCH_SIZE = 1000
+
+
+# =========================================================
+# TITLE
+# =========================================================
+
 st.title("📊 Data Profiler")
 
 st.write(
-    "Profile small and large datasets from CSV files "
-    "or PostgreSQL databases."
+    "Profile small and large datasets from "
+    "CSV files or PostgreSQL databases."
 )
 
 
-# ---------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------
+# =========================================================
+# SIDEBAR CONFIGURATION
+# =========================================================
 
 with st.sidebar:
 
     st.header("⚙️ Settings")
 
-    chunk_size = st.number_input(
-        "Rows per processing batch",
-        min_value=10_000,
-        max_value=1_000_000,
-        value=100_000,
-        step=10_000,
+    # -----------------------------------------------------
+    # BATCHING TOGGLE
+    # -----------------------------------------------------
+
+    process_by_batches = st.toggle(
+        "Process by batches",
+        value=True,
         help=(
-            "Controls how many rows are processed "
-            "at a time."
+            "Enable this to process the dataset "
+            "incrementally using batches of 1,000 rows. "
+            "Disable this to load the complete dataset "
+            "into memory."
         ),
     )
+
+    # -----------------------------------------------------
+    # DISPLAY BATCH INFORMATION
+    # -----------------------------------------------------
+
+    if process_by_batches:
+
+        st.info(
+            "Batch processing is enabled.\n\n"
+            f"Batch size: {BATCH_SIZE:,} rows"
+        )
+
+    else:
+
+        st.warning(
+            "Normal processing is enabled.\n\n"
+            "The complete dataset will be loaded "
+            "into memory."
+        )
+
+    # -----------------------------------------------------
+    # TOP N
+    # -----------------------------------------------------
 
     top_n = st.number_input(
         "Top categorical values",
@@ -54,9 +97,9 @@ with st.sidebar:
     )
 
 
-# ---------------------------------------------------------
-# Input
-# ---------------------------------------------------------
+# =========================================================
+# DATA SOURCE
+# =========================================================
 
 st.subheader("📁 Dataset")
 
@@ -89,12 +132,20 @@ if data_source == "CSV":
         horizontal=True,
     )
 
+    # -----------------------------------------------------
+    # UPLOAD CSV
+    # -----------------------------------------------------
+
     if input_mode == "Upload CSV":
 
         uploaded_file = st.file_uploader(
             "Upload your CSV file",
             type=["csv"],
         )
+
+    # -----------------------------------------------------
+    # LOCAL CSV
+    # -----------------------------------------------------
 
     else:
 
@@ -116,6 +167,10 @@ else:
 
     col1, col2 = st.columns(2)
 
+    # -----------------------------------------------------
+    # COLUMN 1
+    # -----------------------------------------------------
+
     with col1:
 
         postgres_host = st.text_input(
@@ -132,6 +187,10 @@ else:
             "Username",
             value="postgres",
         )
+
+    # -----------------------------------------------------
+    # COLUMN 2
+    # -----------------------------------------------------
 
     with col2:
 
@@ -159,9 +218,9 @@ else:
     )
 
 
-# ---------------------------------------------------------
-# Helper
-# ---------------------------------------------------------
+# =========================================================
+# PROFILE SOURCE
+# =========================================================
 
 def profile_source(reader):
 
@@ -176,38 +235,131 @@ def profile_source(reader):
     start_time = time.perf_counter()
 
     batch_count = 0
-
     total_rows = 0
 
     try:
 
-        for batch in reader.read_batches(
-            chunksize=int(chunk_size)
-        ):
+        # =================================================
+        # BATCH PROCESSING
+        # =================================================
 
-            profiler.process_batch(
-                batch
+        if process_by_batches:
+
+            status.info(
+                f"Batch processing enabled "
+                f"({BATCH_SIZE:,} rows per batch)."
             )
 
-            batch_count += 1
+            for batch in reader.read_batches(
+                chunksize=BATCH_SIZE
+            ):
 
-            total_rows += len(batch)
+                # -----------------------------------------
+                # Send batch to DataProfiler
+                # -----------------------------------------
+
+                profiler.process_batch(
+                    batch
+                )
+
+                batch_count += 1
+
+                total_rows += len(batch)
+
+                # -----------------------------------------
+                # Update status
+                # -----------------------------------------
+
+                status.write(
+                    f"Processed batch "
+                    f"{batch_count:,} — "
+                    f"{len(batch):,} rows "
+                    f"(total: {total_rows:,})"
+                )
+
+                # -----------------------------------------
+                # Progress
+                #
+                # We don't know the total number of
+                # batches before reading the dataset.
+                # Therefore this is an activity indicator
+                # rather than an exact percentage.
+                # -----------------------------------------
+
+                progress_value = min(
+                    0.99,
+                    0.05
+                    + (
+                        (batch_count % 95)
+                        / 100
+                    ),
+                )
+
+                progress_bar.progress(
+                    progress_value
+                )
+
+                # -----------------------------------------
+                # Release current batch reference
+                # -----------------------------------------
+
+                del batch
+
+        # =================================================
+        # NORMAL PROCESSING
+        # =================================================
+
+        else:
+
+            status.info(
+                "Normal processing enabled. "
+                "Loading complete dataset..."
+            )
+
+            # -----------------------------------------
+            # Read entire dataset
+            # -----------------------------------------
+
+            dataframe = reader.read()
+
+            total_rows = len(
+                dataframe
+            )
 
             status.write(
-                f"Processed batch "
-                f"{batch_count:,} — "
-                f"{len(batch):,} rows "
-                f"(total: {total_rows:,})"
+                f"Loaded {total_rows:,} rows. "
+                "Running profiler..."
             )
 
             progress_bar.progress(
-                min(
-                    0.99,
-                    batch_count / (
-                        batch_count + 10
-                    ),
-                )
+                0.5
             )
+
+            # -----------------------------------------
+            # Send complete dataframe
+            # -----------------------------------------
+
+            profiler.process_batch(
+                dataframe
+            )
+
+            progress_bar.progress(
+                0.8
+            )
+
+            # -----------------------------------------
+            # Release dataframe
+            # -----------------------------------------
+
+            del dataframe
+
+        # =================================================
+        # GENERATE FINAL RESULT
+        # =================================================
+
+        status.write(
+            "Finalizing profile..."
+        )
 
         result = profiler.generate()
 
@@ -216,7 +368,9 @@ def profile_source(reader):
             - start_time
         )
 
-        progress_bar.progress(1.0)
+        progress_bar.progress(
+            1.0
+        )
 
         status.success(
             f"Profiling completed in "
@@ -236,9 +390,9 @@ def profile_source(reader):
         return None
 
 
-# ---------------------------------------------------------
-# Start Profiling
-# ---------------------------------------------------------
+# =========================================================
+# START PROFILING
+# =========================================================
 
 if st.button(
     "🚀 Start Profiling",
@@ -250,12 +404,15 @@ if st.button(
 
     file_name = None
 
-
     # =====================================================
     # CSV
     # =====================================================
 
     if data_source == "CSV":
+
+        # -------------------------------------------------
+        # UPLOAD CSV
+        # -------------------------------------------------
 
         if input_mode == "Upload CSV":
 
@@ -269,10 +426,16 @@ if st.button(
 
             reader = CSVReader(
                 uploaded_file,
-                chunksize=int(chunk_size),
+                chunksize=BATCH_SIZE,
             )
 
-            file_name = uploaded_file.name
+            file_name = (
+                uploaded_file.name
+            )
+
+        # -------------------------------------------------
+        # LOCAL CSV
+        # -------------------------------------------------
 
         else:
 
@@ -289,20 +452,22 @@ if st.button(
             ):
 
                 st.error(
-                    "The specified file does not exist."
+                    "The specified file "
+                    "does not exist."
                 )
 
                 st.stop()
 
             reader = CSVReader(
                 local_path,
-                chunksize=int(chunk_size),
+                chunksize=BATCH_SIZE,
             )
 
-            file_name = os.path.basename(
-                local_path
+            file_name = (
+                os.path.basename(
+                    local_path
+                )
             )
-
 
     # =====================================================
     # POSTGRESQL
@@ -310,10 +475,15 @@ if st.button(
 
     else:
 
+        # -------------------------------------------------
+        # VALIDATION
+        # -------------------------------------------------
+
         if not postgres_password:
 
             st.warning(
-                "Please enter your PostgreSQL password."
+                "Please enter your "
+                "PostgreSQL password."
             )
 
             st.stop()
@@ -321,14 +491,15 @@ if st.button(
         if not postgres_table:
 
             st.warning(
-                "Please enter a PostgreSQL table name."
+                "Please enter a PostgreSQL "
+                "table name."
             )
 
             st.stop()
 
-
-        # URL-encode username and password so
-        # special characters do not break the URL.
+        # -------------------------------------------------
+        # ENCODE CREDENTIALS
+        # -------------------------------------------------
 
         encoded_username = quote_plus(
             postgres_username
@@ -338,6 +509,9 @@ if st.button(
             postgres_password
         )
 
+        # -------------------------------------------------
+        # CONNECTION URL
+        # -------------------------------------------------
 
         connection_url = (
             "postgresql+psycopg://"
@@ -348,14 +522,16 @@ if st.button(
             f"{postgres_database}"
         )
 
+        # -------------------------------------------------
+        # CREATE READER
+        # -------------------------------------------------
 
         reader = PostgreSQLReader(
             connection_url=connection_url,
             table_name=postgres_table,
             schema=postgres_schema,
-            chunksize=int(chunk_size),
+            chunksize=BATCH_SIZE,
         )
-
 
         file_name = (
             f"{postgres_database}."
@@ -363,15 +539,17 @@ if st.button(
             f"{postgres_table}"
         )
 
-
     # =====================================================
-    # Run profiler
+    # RUN PROFILER
     # =====================================================
 
     result = profile_source(
         reader
     )
 
+    # =====================================================
+    # SAVE RESULT IN SESSION STATE
+    # =====================================================
 
     if result is not None:
 
@@ -379,14 +557,30 @@ if st.button(
             "dataset"
         ]["name"] = file_name
 
+        result[
+            "dataset"
+        ]["processing_mode"] = (
+            "batch"
+            if process_by_batches
+            else "normal"
+        )
+
+        if process_by_batches:
+
+            result[
+                "dataset"
+            ]["batch_size"] = (
+                BATCH_SIZE
+            )
+
         st.session_state[
             "profile_result"
         ] = result
 
 
-# ---------------------------------------------------------
-# Display Results
-# ---------------------------------------------------------
+# =========================================================
+# DISPLAY RESULTS
+# =========================================================
 
 if "profile_result" in st.session_state:
 
@@ -404,10 +598,21 @@ if "profile_result" in st.session_state:
 
     st.divider()
 
-    st.header("📈 Profile Results")
+    st.header(
+        "📈 Profile Results"
+    )
 
+    # =====================================================
+    # TABS
+    # =====================================================
 
-    tab_overview, tab_columns, tab_numeric, tab_categorical, tab_json = st.tabs(
+    (
+        tab_overview,
+        tab_columns,
+        tab_numeric,
+        tab_categorical,
+        tab_json,
+    ) = st.tabs(
         [
             "Overview",
             "Columns",
@@ -419,10 +624,14 @@ if "profile_result" in st.session_state:
 
 
     # =====================================================
-    # Overview
+    # OVERVIEW
     # =====================================================
 
     with tab_overview:
+
+        # -------------------------------------------------
+        # METRICS
+        # -------------------------------------------------
 
         c1, c2, c3, c4 = st.columns(4)
 
@@ -443,14 +652,63 @@ if "profile_result" in st.session_state:
 
         c4.metric(
             "Missing %",
-            f"{dataset['overall_missing_percentage']:.2f}%",
+            (
+                f"{dataset['overall_missing_percentage']:.2f}%"
+            ),
         )
 
+        # -------------------------------------------------
+        # PROCESSING MODE
+        # -------------------------------------------------
+
+        st.subheader(
+            "⚙️ Processing Information"
+        )
+
+        processing_info = {
+            "Processing mode": (
+                "Batch processing"
+                if dataset.get(
+                    "processing_mode"
+                ) == "batch"
+                else "Normal processing"
+            )
+        }
+
+        if dataset.get(
+            "processing_mode"
+        ) == "batch":
+
+            processing_info[
+                "Batch size"
+            ] = (
+                f"{dataset.get('batch_size', BATCH_SIZE):,} rows"
+            )
+
+        processing_df = pd.DataFrame(
+            [
+                {
+                    "Setting": key,
+                    "Value": value,
+                }
+                for key, value
+                in processing_info.items()
+            ]
+        )
+
+        st.dataframe(
+            processing_df,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # -------------------------------------------------
+        # DATASET STATISTICS
+        # -------------------------------------------------
 
         st.subheader(
             "Dataset Statistics"
         )
-
 
         overview_df = pd.DataFrame(
             {
@@ -465,9 +723,13 @@ if "profile_result" in st.session_state:
                 ],
 
                 "Value": [
-                    dataset["rows"],
+                    dataset[
+                        "rows"
+                    ],
 
-                    dataset["columns"],
+                    dataset[
+                        "columns"
+                    ],
 
                     round(
                         dataset[
@@ -500,12 +762,15 @@ if "profile_result" in st.session_state:
             }
         )
 
-
         st.dataframe(
             overview_df,
             use_container_width=True,
+            hide_index=True,
         )
 
+        # -------------------------------------------------
+        # EMPTY COLUMNS
+        # -------------------------------------------------
 
         if dataset[
             "completely_empty_columns"
@@ -522,7 +787,7 @@ if "profile_result" in st.session_state:
 
 
     # =====================================================
-    # Columns
+    # COLUMNS
     # =====================================================
 
     with tab_columns:
@@ -570,15 +835,23 @@ if "profile_result" in st.session_state:
                 }
             )
 
+        if rows:
 
-        st.dataframe(
-            pd.DataFrame(rows),
-            use_container_width=True,
-        )
+            st.dataframe(
+                pd.DataFrame(rows),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        else:
+
+            st.info(
+                "No matching columns found."
+            )
 
 
     # =====================================================
-    # Numerical
+    # NUMERICAL
     # =====================================================
 
     with tab_numeric:
@@ -646,7 +919,6 @@ if "profile_result" in st.session_state:
                 }
             )
 
-
         if numerical_rows:
 
             numeric_df = pd.DataFrame(
@@ -656,6 +928,15 @@ if "profile_result" in st.session_state:
             st.dataframe(
                 numeric_df,
                 use_container_width=True,
+                hide_index=True,
+            )
+
+            # -------------------------------------------------
+            # NUMERICAL CHART
+            # -------------------------------------------------
+
+            st.subheader(
+                "Mean vs Median"
             )
 
             st.bar_chart(
@@ -669,6 +950,28 @@ if "profile_result" in st.session_state:
                 ]
             )
 
+            # -------------------------------------------------
+            # OUTLIERS CHART
+            # -------------------------------------------------
+
+            st.subheader(
+                "Potential Outliers"
+            )
+
+            outlier_df = (
+                numeric_df[
+                    [
+                        "Column",
+                        "Outliers",
+                    ]
+                ]
+                .set_index("Column")
+            )
+
+            st.bar_chart(
+                outlier_df
+            )
+
         else:
 
             st.info(
@@ -677,7 +980,7 @@ if "profile_result" in st.session_state:
 
 
     # =====================================================
-    # Categorical
+    # CATEGORICAL
     # =====================================================
 
     with tab_categorical:
@@ -713,7 +1016,6 @@ if "profile_result" in st.session_state:
                 }
             )
 
-
         if categorical_rows:
 
             categorical_df = pd.DataFrame(
@@ -723,6 +1025,15 @@ if "profile_result" in st.session_state:
             st.dataframe(
                 categorical_df,
                 use_container_width=True,
+                hide_index=True,
+            )
+
+            # -------------------------------------------------
+            # UNIQUE VALUES CHART
+            # -------------------------------------------------
+
+            st.subheader(
+                "Unique Values"
             )
 
             st.bar_chart(
@@ -733,11 +1044,13 @@ if "profile_result" in st.session_state:
                 ]
             )
 
+            # -------------------------------------------------
+            # TOP VALUES
+            # -------------------------------------------------
 
             st.subheader(
                 "Top Values"
             )
-
 
             for name, info in columns.items():
 
@@ -757,14 +1070,34 @@ if "profile_result" in st.session_state:
                     "most_frequent_values"
                 ]
 
-
                 if top_values:
 
+                    top_values_df = pd.DataFrame(
+                        top_values
+                    )
+
                     st.dataframe(
-                        pd.DataFrame(
-                            top_values
-                        ),
+                        top_values_df,
                         use_container_width=True,
+                        hide_index=True,
+                    )
+
+                    # -----------------------------------------
+                    # FREQUENCY CHART
+                    # -----------------------------------------
+
+                    chart_df = (
+                        top_values_df[
+                            [
+                                "value",
+                                "frequency",
+                            ]
+                        ]
+                        .set_index("value")
+                    )
+
+                    st.bar_chart(
+                        chart_df
                     )
 
         else:
@@ -786,6 +1119,9 @@ if "profile_result" in st.session_state:
             default=str,
         )
 
+        # -------------------------------------------------
+        # DOWNLOAD BUTTON
+        # -------------------------------------------------
 
         st.download_button(
             label="⬇️ Download JSON Profile",
@@ -802,5 +1138,14 @@ if "profile_result" in st.session_state:
             use_container_width=True,
         )
 
+        # -------------------------------------------------
+        # JSON VIEWER
+        # -------------------------------------------------
 
-        st.json(result)
+        st.subheader(
+            "JSON Result"
+        )
+
+        st.json(
+            result
+        )

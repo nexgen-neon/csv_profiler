@@ -3,28 +3,64 @@ from collections import Counter
 
 class CategoricalProfiler:
 
-    MAX_UNIQUE_TRACKED = 100_000
+    # Prevent the unique-value set from growing without bounds
+    # when profiling very large datasets.
+    MAX_UNIQUE_TRACKED = 1000
 
     def __init__(self, top_n=5):
 
         self.top_n = top_n
 
+        # Total number of rows processed.
         self.total_count = 0
+
+        # Number of null values.
         self.null_count = 0
 
+        # Number of non-null values.
+        self.non_null_count = 0
+
+        # Track unique values.
         self.unique_values = set()
 
+        # Track frequencies of values.
         self.frequency = Counter()
 
+        # Indicates whether the unique-value tracking limit
+        # was reached.
         self.high_cardinality = False
 
     def process(self, series):
 
+        # ---------------------------------------------------------
+        # Total values
+        # ---------------------------------------------------------
+
         self.total_count += len(series)
 
-        self.null_count += int(
+        # ---------------------------------------------------------
+        # Null values
+        # ---------------------------------------------------------
+
+        null_count = int(
             series.isna().sum()
         )
+
+        self.null_count += null_count
+
+        # ---------------------------------------------------------
+        # Non-null values
+        # ---------------------------------------------------------
+
+        non_null_count = (
+            len(series) - null_count
+        )
+
+        self.non_null_count += non_null_count
+
+        # ---------------------------------------------------------
+        # Remove null values
+        # ---------------------------------------------------------
 
         values = (
             series
@@ -35,7 +71,10 @@ class CategoricalProfiler:
         if values.empty:
             return
 
-        # Track frequency.
+        # ---------------------------------------------------------
+        # Frequency calculation
+        # ---------------------------------------------------------
+
         counts = values.value_counts()
 
         for value, count in counts.items():
@@ -44,7 +83,10 @@ class CategoricalProfiler:
                 count
             )
 
-        # Track unique values with a hard memory bound.
+        # ---------------------------------------------------------
+        # Unique-value tracking
+        # ---------------------------------------------------------
+
         new_values = values.unique()
 
         remaining = (
@@ -72,22 +114,39 @@ class CategoricalProfiler:
 
     def finalize(self):
 
+        # ---------------------------------------------------------
+        # Unique count
+        # ---------------------------------------------------------
+
         unique_count = len(
             self.unique_values
         )
 
+        # ---------------------------------------------------------
+        # Unique percentage
+        #
+        # IMPORTANT:
+        #
+        # Null values are excluded from the denominator.
+        #
+        # unique percentage =
+        #
+        # unique non-null values
+        # ----------------------- × 100
+        # total non-null values
+        # ---------------------------------------------------------
+
         unique_percentage = (
             unique_count
-            / self.total_count
+            / self.non_null_count
             * 100
-            if self.total_count
+            if self.non_null_count
             else 0.0
         )
 
-        non_null_count = (
-            self.total_count
-            - self.null_count
-        )
+        # ---------------------------------------------------------
+        # Most frequent values
+        # ---------------------------------------------------------
 
         top_values = []
 
@@ -97,11 +156,11 @@ class CategoricalProfiler:
             )
         ):
 
-            percentage = (
+            frequency_percentage = (
                 count
-                / non_null_count
+                / self.non_null_count
                 * 100
-                if non_null_count
+                if self.non_null_count
                 else 0.0
             )
 
@@ -110,9 +169,13 @@ class CategoricalProfiler:
                     "value": value,
                     "frequency": count,
                     "frequency_percentage":
-                        percentage,
+                        frequency_percentage,
                 }
             )
+
+        # ---------------------------------------------------------
+        # Final result
+        # ---------------------------------------------------------
 
         return {
 

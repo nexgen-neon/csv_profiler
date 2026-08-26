@@ -13,7 +13,7 @@ class CSVReader(BaseReader):
     The reader does NOT load a huge CSV completely into RAM.
     """
 
-    DEFAULT_CHUNKSIZE = 100_000
+    DEFAULT_CHUNKSIZE = 1000
 
     def __init__(
         self,
