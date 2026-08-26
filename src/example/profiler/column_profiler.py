@@ -44,7 +44,7 @@ class ColumnProfiler:
 
         self.unique_values = set()
 
-        self.MAX_UNIQUE_TRACKED = 100_000
+        self.MAX_UNIQUE_TRACKED = 1000
 
         self.high_cardinality = False
 
