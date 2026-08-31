@@ -1,70 +1,116 @@
-import pandas as pd
-from utils.statistics import percentage
-
 class DatasetProfiler:
-    def profile(self, df: pd.DataFrame) -> dict:
-        rows,columns = df.shape
-        total_cells = rows * columns
 
-        missing_cells = int(
-            df.isna().sum().sum()
+    def __init__(self):
+
+        self.total_rows = 0
+        self.total_columns = 0
+
+        self.memory_usage_bytes = 0
+
+        self.total_cells = 0
+        self.total_missing_values = 0
+
+        self.empty_rows = 0
+
+        self.empty_columns = set()
+
+        self.column_names = []
+
+        self.initialized = False
+
+    def process_batch(self, dataframe):
+
+        if dataframe is None:
+            return
+
+        if not self.initialized:
+
+            self.column_names = list(
+                dataframe.columns
+            )
+
+            self.total_columns = len(
+                self.column_names
+            )
+
+            self.initialized = True
+
+        if dataframe.empty:
+            return
+
+        rows = len(dataframe)
+
+        self.total_rows += rows
+
+        self.total_cells += (
+            rows * self.total_columns
         )
 
-        duplicate_rows = int(
-            df.duplicated().sum()
+        self.memory_usage_bytes += int(
+            dataframe.memory_usage(
+                index=True,
+                deep=True,
+            ).sum()
         )
 
-        if columns > 0:
+        missing = dataframe.isna()
 
-            empty_rows = int(
-                df.isna()
-                .all(axis=1)
-                .sum()
+        self.total_missing_values += int(
+            missing.sum().sum()
+        )
+
+        self.empty_rows += int(
+            missing.all(axis=1).sum()
+        )
+
+        empty_columns = (
+            dataframe.columns[
+                missing.all(axis=0)
+            ]
+        )
+
+        self.empty_columns.update(
+            empty_columns.tolist()
+        )
+
+    def finalize(self):
+
+        if self.total_cells:
+
+            missing_percentage = (
+                self.total_missing_values
+                / self.total_cells
+                * 100
             )
 
         else:
 
-            empty_rows = 0
-
-        if rows > 0:
-
-            empty_columns = int(
-                df.isna()
-                .all(axis=0)
-                .sum()
-            )
-
-        else:
-
-            empty_columns = columns
+            missing_percentage = 0.0
 
         return {
 
-            "rows": int(rows),
+            "rows": self.total_rows,
 
-            "columns": int(columns),
+            "columns": self.total_columns,
 
-            "memory_usage_bytes": int(
-                df.memory_usage(
-                    deep=True
-                ).sum()
-            ),
+            "memory_usage_bytes":
+                self.memory_usage_bytes,
 
-            "duplicate_rows":
-                duplicate_rows,
+            "memory_usage_mb":
+                self.memory_usage_bytes
+                / (1024 ** 2),
 
             "completely_empty_rows":
-                empty_rows,
+                self.empty_rows,
 
             "completely_empty_columns":
-                empty_columns,
+                sorted(
+                    self.empty_columns
+                ),
 
             "missing_values":
-                missing_cells,
+                self.total_missing_values,
 
             "overall_missing_percentage":
-                percentage(
-                    missing_cells,
-                    total_cells
-                )
+                missing_percentage,
         }
