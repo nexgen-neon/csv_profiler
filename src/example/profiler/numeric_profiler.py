@@ -691,6 +691,7 @@ class NumericalProfiler:
 
                     "method":
                         "IQR",
+                        
                     "lower_bound": lower_bound,
                     "upper_bound": upper_bound,
                 },
